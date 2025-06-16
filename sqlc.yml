@@ -1,0 +1,13 @@
+version: '2'
+#cloud:
+#  project: '01JVA772148J7B5015D45JTNSJ'
+sql:
+  - engine: "postgresql"
+    schema: "internal/database/migration"
+    queries: "internal/database/queries"
+    gen:
+      go:
+        package: "repository"
+        out: "internal/repository"
+        # Use pgx driver
+        sql_package: "pgx/v5"
