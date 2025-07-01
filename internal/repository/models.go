@@ -6,7 +6,14 @@ package repository
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
+
+type CvAnalysesEmbedding struct {
+	CvID      int64
+	Embedding pgvector.Vector
+	CreatedAt pgtype.Timestamp
+}
 
 type CvAnalysis struct {
 	ID             int64

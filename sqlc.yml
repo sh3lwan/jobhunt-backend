@@ -1,6 +1,4 @@
 version: '2'
-#cloud:
-#  project: '01JVA772148J7B5015D45JTNSJ'
 sql:
   - engine: "postgresql"
     schema: "internal/database/migration"

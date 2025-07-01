@@ -2,8 +2,11 @@ package mq
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/pgvector/pgvector-go"
 	"github.com/segmentio/kafka-go"
+	"github.com/sh3lwan/jobhunter/internal/models"
 	"github.com/sh3lwan/jobhunter/internal/repository"
 	"strconv"
 )
@@ -13,13 +16,13 @@ type Consumer struct {
 	Queries *repository.Queries
 }
 
-func NewConsumer(q *repository.Queries) *Consumer {
+func NewConsumer(q *repository.Queries, topic, broker string) *Consumer {
 	return &Consumer{
 		Queries: q,
 		Reader: kafka.NewReader(kafka.ReaderConfig{
-			Topic:   "cv-result",
+			Topic:   topic,
 			GroupID: "cv-result-group",
-			Brokers: []string{"localhost:9092"},
+			Brokers: []string{broker},
 		}),
 	}
 }
@@ -40,13 +43,30 @@ func (c *Consumer) Consume() {
 			fmt.Printf("Error converting key to int: %s\n", err)
 		}
 
-		//fmt.Printf("Received message: %s\n", string(msg.Value))
+		fmt.Printf("Received message: %s\n", string(msg.Value))
+
+		var body models.ResponseCVData
+		err = json.Unmarshal(msg.Value, &body)
+		fmt.Printf("Received body: %+v\n", body)
+		if err != nil {
+			fmt.Printf("Error unmarshalling message: %s\n", err)
+		}
+
 		err = c.Queries.UpdateCVStructuredJSON(
 			context.Background(),
 			repository.UpdateCVStructuredJSONParams{
 				ID:             key,
 				StructuredJson: msg.Value,
 			})
+
+		err = c.Queries.InsertCVEmbedding(
+			context.Background(),
+			repository.InsertCVEmbeddingParams{
+				CvID:      key,
+				Embedding: pgvector.NewVector(body.Embeddings),
+			},
+		)
+
 		if err != nil {
 			fmt.Printf("Error updating cv: %s\n", err)
 		}

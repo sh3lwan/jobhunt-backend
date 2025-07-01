@@ -3,11 +3,11 @@ package mq
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/segmentio/kafka-go"
 	"github.com/sh3lwan/jobhunter/internal/models"
 	"log"
 	"time"
-	"fmt"
 )
 
 type Producer struct {
@@ -34,12 +34,17 @@ func (p *Producer) Send(cv *models.CVData) error {
 
 	// create kafka message
 	msg := kafka.Message{
-		Key:   []byte(fmt.Sprint(cv.ID)), // optional: use ID as key
+		Key:   fmt.Append(nil, cv.ID), // optional: use ID as key
 		Value: value,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_, err = kafka.Dial("tcp", "localhost:9092")
+	if err != nil {
+		fmt.Printf("Error connecting to localhost:9092: %v", err)
+		return nil
+	}
 
 	// send message
 	err = p.Writer.WriteMessages(ctx, msg)

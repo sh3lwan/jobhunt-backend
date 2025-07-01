@@ -55,6 +55,7 @@ func (s *CVService) HandleCVUpload(ctx context.Context, filename string, data []
 		fmt.Printf("Error parsing CV: %v\n", err)
 		return 0, err
 	}
+
 	cvData.ID = analysis.ID
 
 	textResult, err := json.Marshal(cvData)
@@ -62,6 +63,7 @@ func (s *CVService) HandleCVUpload(ctx context.Context, filename string, data []
 		fmt.Printf("Error marshalling CV data: %v\n", err)
 		return 0, err
 	}
+
 	err = s.repo.UpdateCVStatus(ctx, repository.UpdateCVStatusParams{
 		ID:         analysis.ID,
 		ParsedText: pgtype.Text{String: string(textResult), Valid: true},
@@ -75,6 +77,7 @@ func (s *CVService) HandleCVUpload(ctx context.Context, filename string, data []
 
 	err = s.producer.Send(cvData)
 	if err != nil {
+		fmt.Println("Error sending to kafka producer")
 		return 0, err
 	}
 

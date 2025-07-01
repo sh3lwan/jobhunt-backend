@@ -80,8 +80,6 @@ func sendToParserService(pdfFile []byte) (*ParseResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	fmt.Printf("Received response from parser %s %s\n ", resp.Status, resp.Body)
-
 	if resp.StatusCode != http.StatusOK {
 		err = fmt.Errorf("parser failed with status code %d", resp.StatusCode)
 		return nil, err

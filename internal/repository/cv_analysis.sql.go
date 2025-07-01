@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 const createCVAnalysis = `-- name: CreateCVAnalysis :one
@@ -48,8 +49,7 @@ const getAllCVAnalysis = `-- name: GetAllCVAnalysis :many
 SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at
 FROM cv_analyses
 WHERE ($3::text[] IS NULL OR status = ANY($3))
-ORDER BY updated_at DESC
-LIMIT $1
+ORDER BY created_at DESC LIMIT $1
 OFFSET $2
 `
 
@@ -108,6 +108,35 @@ func (q *Queries) GetCVAnalysis(ctx context.Context, id int64) (CvAnalysis, erro
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getCVEmbedding = `-- name: GetCVEmbedding :one
+SELECT embedding
+FROM cv_analyses_embeddings
+WHERE cv_id = $1
+`
+
+func (q *Queries) GetCVEmbedding(ctx context.Context, cvID int64) (pgvector.Vector, error) {
+	row := q.db.QueryRow(ctx, getCVEmbedding, cvID)
+	var embedding pgvector.Vector
+	err := row.Scan(&embedding)
+	return embedding, err
+}
+
+const insertCVEmbedding = `-- name: InsertCVEmbedding :exec
+INSERT INTO cv_analyses_embeddings (cv_id, embedding)
+VALUES ($1, $2) ON CONFLICT (cv_id) DO
+UPDATE SET embedding = EXCLUDED.embedding
+`
+
+type InsertCVEmbeddingParams struct {
+	CvID      int64
+	Embedding pgvector.Vector
+}
+
+func (q *Queries) InsertCVEmbedding(ctx context.Context, arg InsertCVEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, insertCVEmbedding, arg.CvID, arg.Embedding)
+	return err
 }
 
 const updateCVStatus = `-- name: UpdateCVStatus :exec

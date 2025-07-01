@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
+	"github.com/segmentio/kafka-go"
 	"github.com/sh3lwan/jobhunter/internal/mq"
 	"github.com/sh3lwan/jobhunter/internal/repository"
 	"github.com/sh3lwan/jobhunter/internal/services"
@@ -26,6 +28,15 @@ func NewHandler(repo *repository.Queries, producer *mq.Producer) *Handler {
 }
 
 func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	conn, err := kafka.Dial("tcp", os.Getenv("KAFKA_BROKER"))
+
+	if err != nil {
+		fmt.Printf("Unreachable %v", err)
+		return
+	}
+
+	fmt.Println("Kafka is reachable 🎉")
+	conn.Close()
 	w.Write([]byte("online"))
 }
 
@@ -92,8 +103,12 @@ func (h *Handler) UploadCV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	id, err := h.cvService.HandleCVUpload(ctx, header.Filename, data)
+	id, err := h.cvService.HandleCVUpload(
+		r.Context(),
+		header.Filename,
+		data,
+	)
+
 	if err != nil {
 		http.Error(w, "Upload failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -130,7 +145,6 @@ func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {
 	for _, cv := range cvs {
 		h.cvService.Analyze(cv)
 		break
-
 	}
 
 	utils.RespondJSON(w, http.StatusOK, map[string]any{

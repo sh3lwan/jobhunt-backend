@@ -27,6 +27,7 @@ func NewServer(addr string) *Server {
 
 	cvTopic := os.Getenv("KAFKA_CV_TOPIC")
 	kafkaBroker := os.Getenv("KAFKA_BROKER")
+
 	p := mq.NewProducer(kafkaBroker, cvTopic)
 
 	// Create a connection pool
@@ -43,7 +44,9 @@ func NewServer(addr string) *Server {
 
 	queries := repository.New(dbpool)
 
-	c := mq.NewConsumer(queries)
+	resultTopic := os.Getenv("KAFKA_RESULT_TOPIC")
+
+	c := mq.NewConsumer(queries, resultTopic, kafkaBroker)
 
 	handler := handlers.NewHandler(queries, p)
 	//handler = middleware.CORS(handler)
