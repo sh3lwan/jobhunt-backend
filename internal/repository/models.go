@@ -25,3 +25,18 @@ type CvAnalysis struct {
 	CreatedAt      pgtype.Timestamp
 	UpdatedAt      pgtype.Timestamp
 }
+
+type Job struct {
+	ID          int32
+	SourceID    pgtype.Text
+	Source      string
+	Title       pgtype.Text
+	Company     pgtype.Text
+	Logo        pgtype.Text
+	Location    pgtype.Text
+	Url         pgtype.Text
+	Tags        []string
+	Description pgtype.Text
+	PublishAt   pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+}

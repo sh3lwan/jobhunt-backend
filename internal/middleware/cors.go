@@ -1,8 +1,10 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+)
 
-func CORS(next http.Handler) http.Handler {
+func CORS(next *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Allow everything for dev. Adjust origins as needed later.
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -15,6 +17,7 @@ func CORS(next http.Handler) http.Handler {
 			return
 		}
 
+		//utils.RespondJSON(w, r.Response.StatusCode, r.Body);
 		next.ServeHTTP(w, r)
 	})
 }

@@ -3,91 +3,150 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
+	"net/http"
+	"time"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sh3lwan/jobhunter/internal/handlers"
 	"github.com/sh3lwan/jobhunter/internal/middleware"
 	"github.com/sh3lwan/jobhunter/internal/mq"
 	"github.com/sh3lwan/jobhunter/internal/repository"
-	"log"
-	"net/http"
-	"os"
+	"github.com/sh3lwan/jobhunter/internal/router"
+	"github.com/sh3lwan/jobhunter/internal/schedular"
 )
 
-type Server struct {
-	Addr     string
-	Kafka    *mq.Producer
-	Consumer *mq.Consumer
-	DB       *pgxpool.Pool
-	Handler  *handlers.Handler
-	Mux      *http.ServeMux
+type Config struct {
+	Addr        string
+	DatabaseURL string
+	KafkaBroker string
+	CVTopic     string
+	ResultTopic string
+
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	IdleTimeout  time.Duration
 }
 
-func NewServer(addr string) *Server {
-	mux := http.NewServeMux()
+type Server struct {
+	config   *Config
+	server   *http.Server
+	producer *mq.Producer
+	consumer *mq.Consumer
+	db       *pgxpool.Pool
+	logger   *log.Logger
+}
 
-	cvTopic := os.Getenv("KAFKA_CV_TOPIC")
-	kafkaBroker := os.Getenv("KAFKA_BROKER")
-
-	p := mq.NewProducer(kafkaBroker, cvTopic)
+func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 
 	// Create a connection pool
-	dsn := os.Getenv("DATABASE_URL")
-	dbpool, err := pgxpool.New(context.Background(), dsn)
+	db, err := createDBPool(config.DatabaseURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to create connection pool: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to create database pool: %w", err)
 	}
 
-	if err != nil {
-		log.Fatal(err)
+	// Create message queue components
+	producer := mq.NewProducer(config.KafkaBroker, config.CVTopic)
+
+	// Create repository
+	queries := repository.New(db)
+
+	// Create consumer
+	consumer := mq.NewConsumer(queries, config.ResultTopic, config.KafkaBroker)
+
+	h := handlers.NewHandler(queries, producer)
+
+	mux := router.NewRouter(h)
+
+	handler := middleware.CORS(mux)
+
+	// Create HTTP server with timeouts
+	httpServer := &http.Server{
+		Addr:         config.Addr,
+		Handler:      handler,
+		ReadTimeout:  config.ReadTimeout,
+		WriteTimeout: config.WriteTimeout,
+		IdleTimeout:  config.IdleTimeout,
 	}
 
-	queries := repository.New(dbpool)
-
-	resultTopic := os.Getenv("KAFKA_RESULT_TOPIC")
-
-	c := mq.NewConsumer(queries, resultTopic, kafkaBroker)
-
-	handler := handlers.NewHandler(queries, p)
-	//handler = middleware.CORS(handler)
-
-	s := &Server{
-		addr,
-		p,
-		c,
-		dbpool,
-		handler,
-		mux,
-	}
-
-	s.routes()
-
-	return s
+	return &Server{
+		config:   config,
+		server:   httpServer,
+		consumer: consumer,
+		producer: producer,
+		db:       db,
+		logger:   logger,
+	}, nil
 }
 
-func (s *Server) Start() {
-	fmt.Printf("Starting server at %s\n", s.Addr)
+func createDBPool(databaseURL string) (*pgxpool.Pool, error) {
+	ctx := context.Background()
 
-	go s.Consumer.Consume()
+	pool, err := pgxpool.New(ctx, databaseURL)
 
-	defer s.DB.Close()
+	if err != nil {
+		return nil, err
+	}
 
-	cors := middleware.CORS(s.Mux)
+	// Test the connection
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
 
-	if err := http.ListenAndServe(s.Addr, cors); err != nil {
-		log.Fatal(err.Error())
+	return pool, nil
+}
+
+// Start starts the server and handles graceful shutdown
+func (s *Server) Start(ctx context.Context) error {
+	// Start consumer in a goroutine
+	go func() {
+		if err := s.consumer.Consume(); err != nil {
+			s.logger.Printf("Consumer error: %v", err)
+		}
+	}()
+
+	// Start server in a goroutine
+	serverErrChan := make(chan error, 1)
+	go func() {
+		s.logger.Printf("Starting server at %s", s.config.Addr)
+		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErrChan <- err
+		}
+	}()
+
+	queries := repository.New(s.db)
+	schedular.StartSchedular(queries, ctx)
+
+	// Wait for shutdown signal or server error
+	select {
+	case err := <-serverErrChan:
+		return fmt.Errorf("server error: %w", err)
+	case <-ctx.Done():
+		s.logger.Println("Shutting down server...")
+		return s.shutdown()
 	}
 }
 
-func (s *Server) routes() {
+// Shutdown gracefully shuts down the server
+func (s *Server) shutdown() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	s.Mux.HandleFunc("GET /", s.Handler.HealthCheck)
+	// Shutdown HTTP server
+	if err := s.server.Shutdown(ctx); err != nil {
+		s.logger.Printf("Server shutdown error: %v", err)
+	}
 
-	s.Mux.HandleFunc("POST /api/v1/upload", s.Handler.UploadCV)
+	// Close database connection
+	s.db.Close()
 
-	s.Mux.HandleFunc("GET /api/v1/cvs", s.Handler.ListCVs)
+	// Close producer
+	if err := s.producer.Close(); err != nil {
+		s.logger.Printf("Producer close error: %v", err)
+	}
 
-	s.Mux.HandleFunc("GET /api/v1/fetch", s.Handler.FetchJobs)
+	s.logger.Println("Server shutdown complete")
 
-	s.Mux.HandleFunc("GET /api/v1/stream", s.Handler.StreamCVStatus)
+	return nil
 }

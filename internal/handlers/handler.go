@@ -151,3 +151,31 @@ func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {
 		"cvs": cvs,
 	})
 }
+
+func (h *Handler) FetchRemotiveJobs(w http.ResponseWriter, r *http.Request) {
+
+	skills, err := h.cvService.GetSkills(r.Context())
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	remotive := services.NewRemotiveService()
+
+	fmt.Println("Searching skills", skills)
+
+	jobs, err := remotive.Search(skills)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{
+		"jobs": jobs,
+	})
+}

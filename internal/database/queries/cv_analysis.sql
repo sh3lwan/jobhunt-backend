@@ -35,3 +35,10 @@ UPDATE SET embedding = EXCLUDED.embedding;
 SELECT embedding
 FROM cv_analyses_embeddings
 WHERE cv_id = $1;
+
+-- name: GetDistinctSkills :many
+SELECT DISTINCT tech::text AS technology
+FROM cv_analyses,
+LATERAL jsonb_array_elements(structured_json->'technologies') AS tech
+WHERE structured_json IS NOT NULL;
+

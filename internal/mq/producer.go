@@ -57,6 +57,6 @@ func (p *Producer) Send(cv *models.CVData) error {
 	return nil
 }
 
-func (p *Producer) Close() {
-	p.Writer.Close()
+func (p *Producer) Close() error {
+	return p.Writer.Close()
 }

@@ -27,7 +27,7 @@ func NewConsumer(q *repository.Queries, topic, broker string) *Consumer {
 	}
 }
 
-func (c *Consumer) Consume() {
+func (c *Consumer) Consume() error {
 	defer c.Reader.Close()
 	for {
 
@@ -67,8 +67,7 @@ func (c *Consumer) Consume() {
 			},
 		)
 
-		if err != nil {
-			fmt.Printf("Error updating cv: %s\n", err)
-		}
+		return err
 	}
+	return nil
 }

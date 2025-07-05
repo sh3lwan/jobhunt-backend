@@ -123,6 +123,33 @@ func (q *Queries) GetCVEmbedding(ctx context.Context, cvID int64) (pgvector.Vect
 	return embedding, err
 }
 
+const getDistinctSkills = `-- name: GetDistinctSkills :many
+SELECT DISTINCT tech::text AS technology
+FROM cv_analyses,
+LATERAL jsonb_array_elements(structured_json->'technologies') AS tech
+WHERE structured_json IS NOT NULL
+`
+
+func (q *Queries) GetDistinctSkills(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, getDistinctSkills)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var technology string
+		if err := rows.Scan(&technology); err != nil {
+			return nil, err
+		}
+		items = append(items, technology)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertCVEmbedding = `-- name: InsertCVEmbedding :exec
 INSERT INTO cv_analyses_embeddings (cv_id, embedding)
 VALUES ($1, $2) ON CONFLICT (cv_id) DO

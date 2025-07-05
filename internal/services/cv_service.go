@@ -105,3 +105,7 @@ func (s *CVService) Analyze(cv repository.CvAnalysis) error {
 
 	return nil
 }
+
+func (s *CVService) GetSkills(ctx context.Context) ([]string, error) {
+	return s.repo.GetDistinctSkills(ctx)
+}
