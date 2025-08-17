@@ -14,7 +14,7 @@ import (
 
 const createCVAnalysis = `-- name: CreateCVAnalysis :one
 INSERT INTO cv_analyses (file_name, original_name, parsed_text, status)
-VALUES ($1, $2, $3, $4) RETURNING id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at
+VALUES ($1, $2, $3, $4) RETURNING id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at, errors
 `
 
 type CreateCVAnalysisParams struct {
@@ -41,12 +41,32 @@ func (q *Queries) CreateCVAnalysis(ctx context.Context, arg CreateCVAnalysisPara
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Errors,
 	)
 	return i, err
 }
 
+const createJobEmbedding = `-- name: CreateJobEmbedding :exec
+INSERT INTO jobs_embeddings (job_id, embedding)
+VALUES ($1, $2)  -- $2 is a vector literal/array cast
+ON CONFLICT (job_id)
+DO UPDATE SET
+  embedding  = EXCLUDED.embedding,
+  updated_at = now()
+`
+
+type CreateJobEmbeddingParams struct {
+	JobID     int64
+	Embedding pgvector.Vector
+}
+
+func (q *Queries) CreateJobEmbedding(ctx context.Context, arg CreateJobEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, createJobEmbedding, arg.JobID, arg.Embedding)
+	return err
+}
+
 const getAllCVAnalysis = `-- name: GetAllCVAnalysis :many
-SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at
+SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at, errors
 FROM cv_analyses
 WHERE ($3::text[] IS NULL OR status = ANY($3))
 ORDER BY created_at DESC LIMIT $1
@@ -77,6 +97,7 @@ func (q *Queries) GetAllCVAnalysis(ctx context.Context, arg GetAllCVAnalysisPara
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Errors,
 		); err != nil {
 			return nil, err
 		}
@@ -89,7 +110,7 @@ func (q *Queries) GetAllCVAnalysis(ctx context.Context, arg GetAllCVAnalysisPara
 }
 
 const getCVAnalysis = `-- name: GetCVAnalysis :one
-SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at
+SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at, errors
 FROM cv_analyses
 WHERE id = $1
 `
@@ -106,6 +127,7 @@ func (q *Queries) GetCVAnalysis(ctx context.Context, id int64) (CvAnalysis, erro
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Errors,
 	)
 	return i, err
 }
@@ -150,6 +172,34 @@ func (q *Queries) GetDistinctSkills(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const getDistinctSkillsForCV = `-- name: GetDistinctSkillsForCV :many
+SELECT DISTINCT tech::text AS technology
+FROM cv_analyses,
+LATERAL jsonb_array_elements(structured_json->'technologies') AS tech
+WHERE structured_json IS NOT NULL
+AND id = $1
+`
+
+func (q *Queries) GetDistinctSkillsForCV(ctx context.Context, id int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, getDistinctSkillsForCV, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var technology string
+		if err := rows.Scan(&technology); err != nil {
+			return nil, err
+		}
+		items = append(items, technology)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertCVEmbedding = `-- name: InsertCVEmbedding :exec
 INSERT INTO cv_analyses_embeddings (cv_id, embedding)
 VALUES ($1, $2) ON CONFLICT (cv_id) DO
@@ -166,21 +216,52 @@ func (q *Queries) InsertCVEmbedding(ctx context.Context, arg InsertCVEmbeddingPa
 	return err
 }
 
+const updateCVErrors = `-- name: UpdateCVErrors :exec
+UPDATE cv_analyses
+SET errors = $2
+WHERE id = $1
+`
+
+type UpdateCVErrorsParams struct {
+	ID     int64
+	Errors []byte
+}
+
+func (q *Queries) UpdateCVErrors(ctx context.Context, arg UpdateCVErrorsParams) error {
+	_, err := q.db.Exec(ctx, updateCVErrors, arg.ID, arg.Errors)
+	return err
+}
+
+const updateCVParsedText = `-- name: UpdateCVParsedText :exec
+UPDATE cv_analyses
+SET parsed_text = $2,
+    status      = 'parsed'
+WHERE id = $1
+`
+
+type UpdateCVParsedTextParams struct {
+	ID         int64
+	ParsedText pgtype.Text
+}
+
+func (q *Queries) UpdateCVParsedText(ctx context.Context, arg UpdateCVParsedTextParams) error {
+	_, err := q.db.Exec(ctx, updateCVParsedText, arg.ID, arg.ParsedText)
+	return err
+}
+
 const updateCVStatus = `-- name: UpdateCVStatus :exec
 UPDATE cv_analyses
-SET status      = $2,
-    parsed_text = $3
+SET status = $2
 WHERE id = $1
 `
 
 type UpdateCVStatusParams struct {
-	ID         int64
-	Status     string
-	ParsedText pgtype.Text
+	ID     int64
+	Status string
 }
 
 func (q *Queries) UpdateCVStatus(ctx context.Context, arg UpdateCVStatusParams) error {
-	_, err := q.db.Exec(ctx, updateCVStatus, arg.ID, arg.Status, arg.ParsedText)
+	_, err := q.db.Exec(ctx, updateCVStatus, arg.ID, arg.Status)
 	return err
 }
 

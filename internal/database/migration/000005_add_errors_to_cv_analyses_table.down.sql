@@ -1,0 +1,2 @@
+ALTER TABLE cv_analyses
+DROP COLUMN IF EXISTS errors;

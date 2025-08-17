@@ -17,13 +17,16 @@ import (
 )
 
 type Handler struct {
-	cvService *services.CVService
-	//http.Handler
+	cvService    *services.CVService
+	dbJobService *services.DBJobService
+	embeddingService *services.EmbeddingService
 }
 
-func NewHandler(repo *repository.Queries, producer *mq.Producer) *Handler {
+func NewHandler(queries *repository.Queries, producer *mq.Producer) *Handler {
 	return &Handler{
-		cvService: services.NewCVService(repo, producer),
+		cvService:    services.NewCVService(queries, producer),
+		dbJobService: services.NewDBJobService(queries),
+		//embeddingService: services.NewEmbeddingService(queries, producer),
 	}
 }
 
@@ -110,7 +113,12 @@ func (h *Handler) UploadCV(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		http.Error(w, "Upload failed: "+err.Error(), http.StatusInternalServerError)
+		// Record the error in the database
+		h.cvService.HandleCVError(r.Context(), id, err)
+
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "Failed to upload CV: " + err.Error(),
+		})
 		return
 	}
 
@@ -133,28 +141,36 @@ func (h *Handler) ListCVs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {
+	// Fetch jobs from db
+	limit := r.URL.Query().Get("limit")
+	if limit == "" {
+		limit = "10" // Default limit
+	}
 
-	statuses := []string{"parsed", "analyzed"}
-	cvs, err := h.cvService.ListCVs(r.Context(), statuses)
-
+	// Convert limit to int
+	limitInt, err := strconv.Atoi(limit)
 	if err != nil {
-		fmt.Println(err)
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "Invalid limit parameter",
+		})
 		return
 	}
 
-	for _, cv := range cvs {
-		h.cvService.Analyze(cv)
-		break
+	offset := r.URL.Query().Get("offset")
+	if offset == "" {
+		offset = "0" // Default offset
+	}
+	// If offset is provided, you can use it in the query
+	offsetInt, err := strconv.Atoi(offset)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "Limit must be greater than 0." + err.Error(),
+		})
+		return
 	}
 
-	utils.RespondJSON(w, http.StatusOK, map[string]any{
-		"cvs": cvs,
-	})
-}
-
-func (h *Handler) FetchRemotiveJobs(w http.ResponseWriter, r *http.Request) {
-
-	skills, err := h.cvService.GetSkills(r.Context())
+	// Fetch jobs from the database
+	jobs, err := h.dbJobService.ListJobs(r.Context(), int32(limitInt), int32(offsetInt))
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -163,9 +179,23 @@ func (h *Handler) FetchRemotiveJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	remotive := services.NewRemotiveService()
+	utils.RespondJSON(w, http.StatusOK, map[string]any{
+		"jobs": jobs,
+	})
 
-	fmt.Println("Searching skills", skills)
+}
+
+func (h *Handler) FetchRemotiveJobs(w http.ResponseWriter, r *http.Request) {
+
+	skills, err := h.cvService.GetSkills(r.Context())
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	remotive := services.NewRemotiveService()
 
 	jobs, err := remotive.Search(skills)
 	if err != nil {
@@ -178,4 +208,88 @@ func (h *Handler) FetchRemotiveJobs(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]any{
 		"jobs": jobs,
 	})
+}
+
+func (h *Handler) FetchJobsForCV(w http.ResponseWriter, r *http.Request) {
+	cv_id := r.PathValue("id")
+
+	id, err := strconv.ParseInt(cv_id, 10, 64)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "Invalid CV id"})
+		return
+	}
+
+	skills, err := h.cvService.GetSkillsForCV(r.Context(), id)
+
+	go h.cvService.FetchJobs(skills)
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "succes", "msg": "Fetch job started"})
+
+}
+
+func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
+	cv_id := r.PathValue("id")
+
+	id, err := strconv.ParseInt(cv_id, 10, 64)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "Invalid CV id"})
+		return
+	}
+
+	cv, err := h.cvService.GetCV(r.Context(), id)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+
+	if cv.Status == "uploaded" {
+		_, err = h.cvService.Parse(r.Context(), cv)
+
+		if err != nil {
+			utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+			return
+		}
+	}
+
+	if cv.Status == "parsed" {
+		err = h.cvService.Analyze(cv)
+		if err != nil {
+			utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+			return
+		}
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "success", "msg": "CV processing retried"})
+
+}
+
+
+func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
+	jobs, err := h.dbJobService.ListJobs(r.Context(), 100, 0)
+
+	jobs = jobs[:5] // For testing purposes, limit to 10 jobs
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	//err = h.embeddingService.Embed(r.Context(), job)
+
+//	if err != nil {
+//		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+//			"error": err.Error(),
+//		})
+//		return
+//	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{
+		"message": "Jobs embedded successfully",
+	})
+	
 }

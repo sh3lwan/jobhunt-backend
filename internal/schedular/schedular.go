@@ -15,7 +15,22 @@ func StartSchedular(q *repository.Queries, ctx context.Context) {
 
 	c.AddFunc("*/30 * * * *", func() {
 		// scrappe remotive jobs + save to db
-		err := services.CollectAndSaveJobs(q, ctx)
+		rmtv := services.NewRemotiveService()
+
+		cvService := services.NewCVService(q, nil)
+
+		skills, err := cvService.GetSkills(ctx)
+
+		jobs, err := rmtv.CollectJobs(q, ctx, skills)
+
+		if err != nil {
+			fmt.Printf("Error @ Schedular - Remoative Collect: %v", err.Error())
+		}
+
+
+		dbjobService := services.NewDBJobService(q)
+		err = dbjobService.SaveJobs(q, ctx, jobs)
+
 		if err != nil {
 			fmt.Println("Error @ Schedular: ", err.Error())
 		}

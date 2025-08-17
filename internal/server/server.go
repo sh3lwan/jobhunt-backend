@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,6 +49,8 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 	// Create message queue components
 	producer := mq.NewProducer(config.KafkaBroker, config.CVTopic)
 
+	defer producer.Close()
+
 	// Create repository
 	queries := repository.New(db)
 
@@ -59,6 +62,12 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 	mux := router.NewRouter(h)
 
 	handler := middleware.CORS(mux)
+
+	// Ensure uploads directory exists
+	err = os.MkdirAll("storage/uploads", 0o755)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage directory: %w", err)
+	}
 
 	// Create HTTP server with timeouts
 	httpServer := &http.Server{

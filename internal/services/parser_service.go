@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/sh3lwan/jobhunter/internal/models"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/sh3lwan/jobhunter/internal/models"
 )
 
 const (

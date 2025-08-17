@@ -24,6 +24,7 @@ type CvAnalysis struct {
 	Status         string
 	CreatedAt      pgtype.Timestamp
 	UpdatedAt      pgtype.Timestamp
+	Errors         []byte
 }
 
 type Job struct {
@@ -39,4 +40,12 @@ type Job struct {
 	Description pgtype.Text
 	PublishAt   pgtype.Timestamptz
 	CreatedAt   pgtype.Timestamptz
+}
+
+type JobsEmbedding struct {
+	ID        int64
+	JobID     int64
+	Embedding pgvector.Vector
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }

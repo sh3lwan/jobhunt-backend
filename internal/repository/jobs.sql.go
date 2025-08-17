@@ -43,3 +43,50 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) error {
 	)
 	return err
 }
+
+const getAllJobs = `-- name: GetAllJobs :many
+SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at
+FROM jobs
+WHERE ($1::text[] IS NULL OR source = ANY($1))
+ORDER BY publish_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type GetAllJobsParams struct {
+	Column1 []string
+	Limit   int32
+	Offset  int32
+}
+
+func (q *Queries) GetAllJobs(ctx context.Context, arg GetAllJobsParams) ([]Job, error) {
+	rows, err := q.db.Query(ctx, getAllJobs, arg.Column1, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceID,
+			&i.Source,
+			&i.Title,
+			&i.Company,
+			&i.Logo,
+			&i.Location,
+			&i.Url,
+			&i.Tags,
+			&i.Description,
+			&i.PublishAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

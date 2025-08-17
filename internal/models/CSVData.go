@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 type CVData struct {
 	ID             int64    `json:"id"` // Unique identifier for tracking
 	Name           string   `json:"name"`
@@ -44,4 +46,10 @@ type ResponseCVData struct {
 	} `json:"education"`
 	Experience []ExperienceItem `json:"experience"`
 	Embeddings []float32        `json:"embeddings"`
+}
+
+type Error struct {
+	Message string `json:"message"`
+	Code    int    `json:"code"`
+	Time   time.Time `json:"time"` // ISO 8601 format
 }

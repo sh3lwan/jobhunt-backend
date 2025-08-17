@@ -2,11 +2,7 @@ package mq
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"github.com/segmentio/kafka-go"
-	"github.com/sh3lwan/jobhunter/internal/models"
-	"log"
 	"time"
 )
 
@@ -25,36 +21,14 @@ func NewProducer(broker string, topic string) *Producer {
 	}
 }
 
-func (p *Producer) Send(cv *models.CVData) error {
-	// marshal CVData into JSON
-	value, err := json.Marshal(cv)
-	if err != nil {
-		return err
-	}
-
-	// create kafka message
-	msg := kafka.Message{
-		Key:   fmt.Append(nil, cv.ID), // optional: use ID as key
-		Value: value,
-	}
-
+func (p *Producer) Send(key, body []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
 	defer cancel()
-	_, err = kafka.Dial("tcp", "localhost:9092")
-	if err != nil {
-		fmt.Printf("Error connecting to localhost:9092: %v", err)
-		return nil
-	}
+	
+	msg := kafka.Message{Key: key, Value: body}
 
-	// send message
-	err = p.Writer.WriteMessages(ctx, msg)
-	if err != nil {
-		log.Printf("Failed to send message to kafka: %v\n", err)
-		return err
-	}
-
-	log.Println("✅ Sent message to Kafka")
-	return nil
+	return p.Writer.WriteMessages(ctx, msg)
 }
 
 func (p *Producer) Close() error {

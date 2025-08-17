@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -8,31 +9,30 @@ import (
 
 	"github.com/golang-module/carbon"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/sh3lwan/jobhunter/internal/repository"
 	. "github.com/sh3lwan/jobhunter/internal/repository"
 )
 
 type RemotiveService struct {
 	JobService
-	url string
 }
 
 func NewRemotiveService() *RemotiveService {
-	addr := "https://remotive.com/api/remote-jobs"
-
-	return &RemotiveService{
-		url: addr,
+	srvc := JobService{
+		BaseURL: "https://remotive.com/api/remote-jobs",
 	}
+
+	return &RemotiveService{srvc}
 }
 
 func (s *RemotiveService) Search(skills []string) ([]Job, error) {
-	skills = skills[:2]
-	resp, err := s.call(s.url, "search", strings.Join(skills, ","))
-
-	defer resp.Body.Close()
+	resp, err := s.call("search", strings.Join(skills, ","))
 
 	if err != nil {
 		return nil, err
 	}
+
+	defer resp.Body.Close()
 
 	var data struct {
 		Jobs []struct {
@@ -79,4 +79,8 @@ func parsePublishDate(dateStr string) time.Time {
 	}
 	c.SetTimezone("UTC") // set timezone explicitly
 	return c.ToStdTime()
+}
+
+func (s *RemotiveService) CollectJobs(q *repository.Queries, ctx context.Context, skills []string) ([]repository.Job, error) {
+ 	return NewRemotiveService().Search(skills)
 }

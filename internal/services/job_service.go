@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,53 +10,28 @@ import (
 )
 
 type JobService struct {
+	BaseURL string
+}
+
+func NewJobService(baseURL string) *JobService {
+	return &JobService{
+		BaseURL: baseURL,
+	}
 }
 
 type Searchable interface {
 	Search(skills string) ([]repository.Job, error)
+	CollectJobs(q *repository.Queries, ctx context.Context) ([]repository.Job, error)
+	SaveJobs(q *repository.Queries, jobs []repository.Job) error
 }
 
-func (s *JobService) call(baseUrl string, key string, params string) (*http.Response, error) {
-
-	// Add query params dynamically
+func (s *JobService) call(key string, params string) (*http.Response, error) {
 	q := url.Values{}
 	q.Set(key, params)
-	fullURL := baseUrl + "?" + removeQuotesFromURL(q.Encode())
-	fmt.Println(fullURL)
+	fullURL := s.BaseURL + "?" + removeQuotesFromURL(q.Encode())
 	return http.Get(fullURL)
 }
 
 func removeQuotesFromURL(rawURL string) string {
 	return strings.ReplaceAll(rawURL, "%22", "")
-}
-
-func CollectAndSaveJobs(q *repository.Queries, ctx context.Context) error {
-
-	cvService := NewCVService(q, nil)
-
-	skills, err := cvService.GetSkills(ctx)
-
-	if err != nil {
-		return err
-	}
-
-	remotive := NewRemotiveService()
-
-	jobs, err := remotive.Search(skills)
-
-	for _, job := range jobs {
-		err := q.CreateJob(ctx, repository.CreateJobParams{
-			SourceID:    job.SourceID,
-			Title:       job.Title,
-			Company:     job.Company,
-			Url:         job.Url,
-			Description: job.Description,
-			Tags:        job.Tags,
-		})
-
-		if err != nil {
-			return fmt.Errorf("❌ Failed to insert job %s: %v", job.Title.String, err)
-		}
-	}
-	return nil
 }
