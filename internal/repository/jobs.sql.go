@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 const createJob = `-- name: CreateJob :exec
@@ -89,4 +90,185 @@ func (q *Queries) GetAllJobs(ctx context.Context, arg GetAllJobsParams) ([]Job, 
 		return nil, err
 	}
 	return items, nil
+}
+
+const getJobById = `-- name: GetJobById :one
+SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at
+FROM jobs
+WHERE id = $1
+`
+
+func (q *Queries) GetJobById(ctx context.Context, id int32) (Job, error) {
+	row := q.db.QueryRow(ctx, getJobById, id)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.SourceID,
+		&i.Source,
+		&i.Title,
+		&i.Company,
+		&i.Logo,
+		&i.Location,
+		&i.Url,
+		&i.Tags,
+		&i.Description,
+		&i.PublishAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getJobMatchesByCvId = `-- name: GetJobMatchesByCvId :many
+SELECT cv_id, job_id, percentage, created_at, updated_at
+FROM cv_job_matches
+WHERE cv_id = $1
+`
+
+func (q *Queries) GetJobMatchesByCvId(ctx context.Context, cvID int64) ([]CvJobMatch, error) {
+	rows, err := q.db.Query(ctx, getJobMatchesByCvId, cvID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CvJobMatch
+	for rows.Next() {
+		var i CvJobMatch
+		if err := rows.Scan(
+			&i.CvID,
+			&i.JobID,
+			&i.Percentage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getJobMatchesByCvIds = `-- name: GetJobMatchesByCvIds :many
+SELECT cv_id, job_id, percentage, created_at, updated_at
+FROM cv_job_matches
+WHERE cv_id = ANY($1::bigint[])
+ORDER BY percentage DESC
+`
+
+func (q *Queries) GetJobMatchesByCvIds(ctx context.Context, cvids []int64) ([]CvJobMatch, error) {
+	rows, err := q.db.Query(ctx, getJobMatchesByCvIds, cvids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CvJobMatch
+	for rows.Next() {
+		var i CvJobMatch
+		if err := rows.Scan(
+			&i.CvID,
+			&i.JobID,
+			&i.Percentage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getJobMatchesByJobId = `-- name: GetJobMatchesByJobId :many
+SELECT cv_id, job_id, percentage, created_at, updated_at
+FROM cv_job_matches
+WHERE job_id = $1
+`
+
+func (q *Queries) GetJobMatchesByJobId(ctx context.Context, jobID int64) ([]CvJobMatch, error) {
+	rows, err := q.db.Query(ctx, getJobMatchesByJobId, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CvJobMatch
+	for rows.Next() {
+		var i CvJobMatch
+		if err := rows.Scan(
+			&i.CvID,
+			&i.JobID,
+			&i.Percentage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const insertAllMissingCvJobPairs = `-- name: InsertAllMissingCvJobPairs :execrows
+INSERT INTO cv_job_matches (cv_id, job_id, percentage)
+SELECT
+  c.cv_id,
+  je.job_id,
+  ROUND(((1 - (c.embedding <=> je.embedding)) * 100)::numeric, 2) AS percentage
+FROM cv_embeddings AS c
+JOIN jobs_embeddings AS je ON TRUE
+LEFT JOIN cv_job_matches AS m
+    ON m.cv_id = c.cv_id AND m.job_id = je.job_id
+WHERE m.cv_id IS NULL
+`
+
+func (q *Queries) InsertAllMissingCvJobPairs(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, insertAllMissingCvJobPairs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertJobEmbedding = `-- name: InsertJobEmbedding :exec
+INSERT INTO jobs_embeddings (job_id, canonical_text, skills_text, responsibilities_text, canonical_text_embeddings, skills_text_embeddings, responsibilities_text_embeddings)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (job_id)
+DO UPDATE SET
+    canonical_text = EXCLUDED.canonical_text,
+    skills_text = EXCLUDED.skills_text,
+    responsibilities_text = EXCLUDED.responsibilities_text,
+    canonical_text_embeddings = EXCLUDED.canonical_text_embeddings,
+    skills_text_embeddings = EXCLUDED.skills_text_embeddings,
+    responsibilities_text_embeddings = EXCLUDED.responsibilities_text_embeddings,
+    updated_at = now()
+`
+
+type InsertJobEmbeddingParams struct {
+	JobID                          int64
+	CanonicalText                  pgtype.Text
+	SkillsText                     pgtype.Text
+	ResponsibilitiesText           pgtype.Text
+	CanonicalTextEmbeddings        pgvector.Vector
+	SkillsTextEmbeddings           pgvector.Vector
+	ResponsibilitiesTextEmbeddings pgvector.Vector
+}
+
+func (q *Queries) InsertJobEmbedding(ctx context.Context, arg InsertJobEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, insertJobEmbedding,
+		arg.JobID,
+		arg.CanonicalText,
+		arg.SkillsText,
+		arg.ResponsibilitiesText,
+		arg.CanonicalTextEmbeddings,
+		arg.SkillsTextEmbeddings,
+		arg.ResponsibilitiesTextEmbeddings,
+	)
+	return err
 }

@@ -9,12 +9,6 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-type CvAnalysesEmbedding struct {
-	CvID      int64
-	Embedding pgvector.Vector
-	CreatedAt pgtype.Timestamp
-}
-
 type CvAnalysis struct {
 	ID             int64
 	OriginalName   string
@@ -25,6 +19,26 @@ type CvAnalysis struct {
 	CreatedAt      pgtype.Timestamp
 	UpdatedAt      pgtype.Timestamp
 	Errors         []byte
+}
+
+type CvEmbedding struct {
+	CvID                           int64
+	CanonicalText                  pgtype.Text
+	SkillsText                     pgtype.Text
+	ResponsibilitiesText           pgtype.Text
+	CanonicalTextEmbeddings        pgvector.Vector
+	SkillsTextEmbeddings           pgvector.Vector
+	ResponsibilitiesTextEmbeddings pgvector.Vector
+	CreatedAt                      pgtype.Timestamp
+	UpdatedAt                      pgtype.Timestamp
+}
+
+type CvJobMatch struct {
+	CvID       int64
+	JobID      int64
+	Percentage pgtype.Numeric
+	CreatedAt  interface{}
+	UpdatedAt  interface{}
 }
 
 type Job struct {
@@ -43,9 +57,14 @@ type Job struct {
 }
 
 type JobsEmbedding struct {
-	ID        int64
-	JobID     int64
-	Embedding pgvector.Vector
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID                             int64
+	JobID                          int64
+	CanonicalText                  pgtype.Text
+	SkillsText                     pgtype.Text
+	ResponsibilitiesText           pgtype.Text
+	CanonicalTextEmbeddings        pgvector.Vector
+	SkillsTextEmbeddings           pgvector.Vector
+	ResponsibilitiesTextEmbeddings pgvector.Vector
+	CreatedAt                      pgtype.Timestamptz
+	UpdatedAt                      pgtype.Timestamptz
 }

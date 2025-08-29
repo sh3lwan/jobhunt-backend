@@ -37,13 +37,20 @@ SET errors = $2
 WHERE id = $1;
 
 -- name: InsertCVEmbedding :exec
-INSERT INTO cv_analyses_embeddings (cv_id, embedding)
-VALUES ($1, $2) ON CONFLICT (cv_id) DO
-UPDATE SET embedding = EXCLUDED.embedding;
+INSERT INTO cv_embeddings (cv_id, canonical_text, skills_text, responsibilities_text, canonical_text_embeddings, skills_text_embeddings, responsibilities_text_embeddings)
+VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (cv_id) DO
+UPDATE SET
+    canonical_text = EXCLUDED.canonical_text,
+    skills_text = EXCLUDED.skills_text,
+    responsibilities_text = EXCLUDED.responsibilities_text,
+    canonical_text_embeddings = EXCLUDED.canonical_text_embeddings,
+    skills_text_embeddings = EXCLUDED.skills_text_embeddings,
+    responsibilities_text_embeddings = EXCLUDED.responsibilities_text_embeddings,
+    updated_at = now();
 
 -- name: GetCVEmbedding :one
-SELECT embedding
-FROM cv_analyses_embeddings
+SELECT *
+FROM cv_embeddings
 WHERE cv_id = $1;
 
 -- name: GetDistinctSkills :many
@@ -59,12 +66,4 @@ FROM cv_analyses,
 LATERAL jsonb_array_elements(structured_json->'technologies') AS tech
 WHERE structured_json IS NOT NULL
 AND id = $1;
-
--- name: CreateJobEmbedding :exec
-INSERT INTO jobs_embeddings (job_id, embedding)
-VALUES ($1, $2)  -- $2 is a vector literal/array cast
-ON CONFLICT (job_id)
-DO UPDATE SET
-  embedding  = EXCLUDED.embedding,
-  updated_at = now();
 

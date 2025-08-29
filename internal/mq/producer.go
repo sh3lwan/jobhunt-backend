@@ -2,8 +2,10 @@ package mq
 
 import (
 	"context"
-	"github.com/segmentio/kafka-go"
+	"log"
 	"time"
+
+	"github.com/segmentio/kafka-go"
 )
 
 type Producer struct {
@@ -27,6 +29,8 @@ func (p *Producer) Send(key, body []byte) error {
 	defer cancel()
 	
 	msg := kafka.Message{Key: key, Value: body}
+
+	log.Printf("Sending message to Kafka topic %s with key %s, body %s", p.Writer.Topic, string(key), string(body))
 
 	return p.Writer.WriteMessages(ctx, msg)
 }

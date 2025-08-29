@@ -27,13 +27,24 @@ func StartSchedular(q *repository.Queries, ctx context.Context) {
 			fmt.Printf("Error @ Schedular - Remoative Collect: %v", err.Error())
 		}
 
-
 		dbjobService := services.NewDBJobService(q)
 		err = dbjobService.SaveJobs(q, ctx, jobs)
 
 		if err != nil {
 			fmt.Println("Error @ Schedular: ", err.Error())
 		}
+	})
+
+	c.AddFunc("*/5 * * * *", func() {
+
+		//embeddingService := services.NewEmbeddingService(nil)
+		//count, err := q.InsertAllMissingCvJobPairs(ctx)
+
+		//	if err != nil {
+		//		log.Printf("Error @ Schedular - InsertAllMissingCvJobPairs: %v", err.Error())
+		//	}
+
+		//	log.Printf("Missing CV-Job Pairs Affected: %d", count)
 	})
 
 	c.Start()

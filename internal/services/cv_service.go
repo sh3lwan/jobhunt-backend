@@ -112,11 +112,7 @@ func (s *CVService) GetCV(ctx context.Context, id int64) (*repository.CvAnalysis
 func (s *CVService) Analyze(cv *repository.CvAnalysis) error {
 	key := fmt.Append(nil, cv.ID)
 
-	value, err := json.Marshal(cv)
-
-	if err != nil {
-		return fmt.Errorf("❌ Failed to marshal CV data for analysis: %v", err)
-	}
+	value := []byte(cv.ParsedText.String)
 
 	return s.producer.Send(key, value)
 }

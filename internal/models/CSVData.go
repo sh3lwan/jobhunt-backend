@@ -48,8 +48,19 @@ type ResponseCVData struct {
 	Embeddings []float32        `json:"embeddings"`
 }
 
+type EmbeddingResponse struct {
+	ID         int64     `json:"id"`         // Unique identifier for tracking
+	Type         string    `json:"type"`          // Type of the response (e.g., "embedding_response")
+	CanonicalText string   `json:"canonical_text"` // Canonical text used for generating the embedding
+	SkillsText string  `json:"skills_text"` // Skills text used for generating the embedding
+	ResponsibilitiesText string  `json:"responsibilities_text"` // Responsibilities text used for generating the embedding
+	CanonicalTextEmbeddings []float32 `json:"canonical_text_embeddings"` // Embedding vector for the canonical text
+	ResponsibilitiesTextEmbeddings []float32 `json:"responsibilities_text_embeddings"` // Embedding vector for the responsibilities text
+	SkillsTextEmbeddings []float32 `json:"skills_text_embeddings"` // Embedding vector for the skills text
+}
+
 type Error struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"`
-	Time   time.Time `json:"time"` // ISO 8601 format
+	Message string    `json:"message"`
+	Code    int       `json:"code"`
+	Time    time.Time `json:"time"` // ISO 8601 format
 }

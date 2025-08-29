@@ -1,6 +1,14 @@
 package services
 
-import "github.com/sh3lwan/jobhunter/internal/mq"
+import (
+	"encoding/json"
+
+	"github.com/sh3lwan/jobhunter/internal/mq"
+)
+
+const (
+	JobEmbeddingType = "job_embedding"
+)
 
 type EmbeddingService struct {
 	producer *mq.Producer
@@ -12,11 +20,18 @@ func NewEmbeddingService(producer *mq.Producer) *EmbeddingService {
 	}
 }
 
-func (s *EmbeddingService) SendEmbeddingRequest(data string) error {
-
-	// Convert the data to a byte slice
-	dataBytes := []byte(data)
+func (s *EmbeddingService) SendEmbeddingRequest(key, data []byte) error {
 	// Send the data to the embedding queue
-	return  s.producer.Send([]byte("embedding_request"), dataBytes)
-}
+	msg := map[string]string {
+		"id":  string(key),
+		"raw_text": string(data),
+		"type": JobEmbeddingType,
+	}
+	// Convert the map to a byte slice (JSON or any other format)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
 
+	return s.producer.Send(key, data)
+}

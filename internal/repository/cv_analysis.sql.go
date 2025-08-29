@@ -46,25 +46,6 @@ func (q *Queries) CreateCVAnalysis(ctx context.Context, arg CreateCVAnalysisPara
 	return i, err
 }
 
-const createJobEmbedding = `-- name: CreateJobEmbedding :exec
-INSERT INTO jobs_embeddings (job_id, embedding)
-VALUES ($1, $2)  -- $2 is a vector literal/array cast
-ON CONFLICT (job_id)
-DO UPDATE SET
-  embedding  = EXCLUDED.embedding,
-  updated_at = now()
-`
-
-type CreateJobEmbeddingParams struct {
-	JobID     int64
-	Embedding pgvector.Vector
-}
-
-func (q *Queries) CreateJobEmbedding(ctx context.Context, arg CreateJobEmbeddingParams) error {
-	_, err := q.db.Exec(ctx, createJobEmbedding, arg.JobID, arg.Embedding)
-	return err
-}
-
 const getAllCVAnalysis = `-- name: GetAllCVAnalysis :many
 SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at, errors
 FROM cv_analyses
@@ -133,16 +114,26 @@ func (q *Queries) GetCVAnalysis(ctx context.Context, id int64) (CvAnalysis, erro
 }
 
 const getCVEmbedding = `-- name: GetCVEmbedding :one
-SELECT embedding
-FROM cv_analyses_embeddings
+SELECT cv_id, canonical_text, skills_text, responsibilities_text, canonical_text_embeddings, skills_text_embeddings, responsibilities_text_embeddings, created_at, updated_at
+FROM cv_embeddings
 WHERE cv_id = $1
 `
 
-func (q *Queries) GetCVEmbedding(ctx context.Context, cvID int64) (pgvector.Vector, error) {
+func (q *Queries) GetCVEmbedding(ctx context.Context, cvID int64) (CvEmbedding, error) {
 	row := q.db.QueryRow(ctx, getCVEmbedding, cvID)
-	var embedding pgvector.Vector
-	err := row.Scan(&embedding)
-	return embedding, err
+	var i CvEmbedding
+	err := row.Scan(
+		&i.CvID,
+		&i.CanonicalText,
+		&i.SkillsText,
+		&i.ResponsibilitiesText,
+		&i.CanonicalTextEmbeddings,
+		&i.SkillsTextEmbeddings,
+		&i.ResponsibilitiesTextEmbeddings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getDistinctSkills = `-- name: GetDistinctSkills :many
@@ -201,18 +192,38 @@ func (q *Queries) GetDistinctSkillsForCV(ctx context.Context, id int64) ([]strin
 }
 
 const insertCVEmbedding = `-- name: InsertCVEmbedding :exec
-INSERT INTO cv_analyses_embeddings (cv_id, embedding)
-VALUES ($1, $2) ON CONFLICT (cv_id) DO
-UPDATE SET embedding = EXCLUDED.embedding
+INSERT INTO cv_embeddings (cv_id, canonical_text, skills_text, responsibilities_text, canonical_text_embeddings, skills_text_embeddings, responsibilities_text_embeddings)
+VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (cv_id) DO
+UPDATE SET
+    canonical_text = EXCLUDED.canonical_text,
+    skills_text = EXCLUDED.skills_text,
+    responsibilities_text = EXCLUDED.responsibilities_text,
+    canonical_text_embeddings = EXCLUDED.canonical_text_embeddings,
+    skills_text_embeddings = EXCLUDED.skills_text_embeddings,
+    responsibilities_text_embeddings = EXCLUDED.responsibilities_text_embeddings,
+    updated_at = now()
 `
 
 type InsertCVEmbeddingParams struct {
-	CvID      int64
-	Embedding pgvector.Vector
+	CvID                           int64
+	CanonicalText                  pgtype.Text
+	SkillsText                     pgtype.Text
+	ResponsibilitiesText           pgtype.Text
+	CanonicalTextEmbeddings        pgvector.Vector
+	SkillsTextEmbeddings           pgvector.Vector
+	ResponsibilitiesTextEmbeddings pgvector.Vector
 }
 
 func (q *Queries) InsertCVEmbedding(ctx context.Context, arg InsertCVEmbeddingParams) error {
-	_, err := q.db.Exec(ctx, insertCVEmbedding, arg.CvID, arg.Embedding)
+	_, err := q.db.Exec(ctx, insertCVEmbedding,
+		arg.CvID,
+		arg.CanonicalText,
+		arg.SkillsText,
+		arg.ResponsibilitiesText,
+		arg.CanonicalTextEmbeddings,
+		arg.SkillsTextEmbeddings,
+		arg.ResponsibilitiesTextEmbeddings,
+	)
 	return err
 }
 

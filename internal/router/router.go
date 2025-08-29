@@ -14,12 +14,15 @@ func NewRouter(h *handlers.Handler) *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/upload", h.UploadCV)
 	mux.HandleFunc("GET /api/v1/stream", h.StreamCVStatus)
 	mux.HandleFunc("GET /api/v1/jobs", h.FetchJobs)
+	mux.HandleFunc("POST /api/v1/jobs/{id}/embed", h.EmbedJob)
 
 	// CVs
 	mux.HandleFunc("GET /api/v1/cvs", h.ListCVs)
 	mux.HandleFunc("POST /api/v1/cvs/{id}/fetch", h.FetchJobsForCV);
 	mux.HandleFunc("POST /api/v1/cvs/{id}/retry", h.RetryCVProceassing)
 	mux.HandleFunc("POST /api/v1/cvs/{id}/match", h.EmbeddJobs)
+
+				
 
 	return mux
 }

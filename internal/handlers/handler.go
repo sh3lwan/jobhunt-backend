@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -17,16 +18,16 @@ import (
 )
 
 type Handler struct {
-	cvService    *services.CVService
-	dbJobService *services.DBJobService
+	cvService        *services.CVService
+	dbJobService     *services.DBJobService
 	embeddingService *services.EmbeddingService
 }
 
 func NewHandler(queries *repository.Queries, producer *mq.Producer) *Handler {
 	return &Handler{
-		cvService:    services.NewCVService(queries, producer),
-		dbJobService: services.NewDBJobService(queries),
-		//embeddingService: services.NewEmbeddingService(queries, producer),
+		cvService:        services.NewCVService(queries, producer),
+		dbJobService:     services.NewDBJobService(queries),
+		embeddingService: services.NewEmbeddingService(producer),
 	}
 }
 
@@ -266,11 +267,10 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 
 }
 
-
 func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := h.dbJobService.ListJobs(r.Context(), 100, 0)
 
-	jobs = jobs[:5] // For testing purposes, limit to 10 jobs
+	//jobs = jobs[:1] // For testing purposes, limit to 10 jobs
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -279,17 +279,91 @@ func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//err = h.embeddingService.Embed(r.Context(), job)
+	go func() {
+		
+		for _, job := range jobs {
+			// Convert job to JSON
+			data, err := json.Marshal(job)
+			if err != nil {
+				utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+					"error": "Failed to marshal job: " + err.Error(),
+				})
+				return
+			}
 
-//	if err != nil {
-//		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
-//			"error": err.Error(),
-//		})
-//		return
-//	}
+			// Send the job data for embedding
+			key := fmt.Append(nil, job.ID)
+
+			err = h.embeddingService.SendEmbeddingRequest(key, data)
+
+			if err != nil {
+				log.Println("Failed to send embedding request for job ID", job.ID, ":", err)
+				continue
+			}
+
+			log.Println("Sent job for embedding:", job.ID, job.Title)
+		}
+	}()
+
+	//key := []byte(jobs[0].ID) // Use the first job ID as the key for the embedding request
+	//err = h.embeddingService.SendEmbeddingRequest(job.ID, data []byte)
+
+	//	if err != nil {
+	//		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+	//			"error": err.Error(),
+	//		})
+	//		return
+	//	}
 
 	utils.RespondJSON(w, http.StatusOK, map[string]string{
 		"message": "Jobs embedded successfully",
 	})
-	
+
+}
+
+func (h *Handler) EmbedJob(w http.ResponseWriter, r *http.Request) {
+	job_id := r.PathValue("id")
+
+	id, err := strconv.ParseInt(job_id, 10, 32)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "Invalid job id"})
+		return
+	}
+	fmt.Println(int32(id))
+
+	job, err := h.dbJobService.GetJobById(r.Context(), int32(id))
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Convert job to JSON
+	data, err := json.Marshal(job)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "Failed to marshal job: " + err.Error(),
+		})
+		return
+	}
+
+	// Send the job data for embedding
+	key := fmt.Append(nil, job.ID)
+
+	err = h.embeddingService.SendEmbeddingRequest(key, data)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "Failed to send embedding request: " + err.Error(),
+		})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{
+		"message": "Jobs embedded successfully",
+	})
+
 }

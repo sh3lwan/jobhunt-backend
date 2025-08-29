@@ -49,13 +49,13 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 	// Create message queue components
 	producer := mq.NewProducer(config.KafkaBroker, config.CVTopic)
 
-	defer producer.Close()
+	//defer producer.Close()
 
 	// Create repository
 	queries := repository.New(db)
 
 	// Create consumer
-	consumer := mq.NewConsumer(queries, config.ResultTopic, config.KafkaBroker)
+	consumer := mq.NewConsumer(queries, db, config.ResultTopic, config.KafkaBroker)
 
 	h := handlers.NewHandler(queries, producer)
 
@@ -108,6 +108,9 @@ func createDBPool(databaseURL string) (*pgxpool.Pool, error) {
 
 // Start starts the server and handles graceful shutdown
 func (s *Server) Start(ctx context.Context) error {
+	// Close kafka producer on shutdown
+	defer s.producer.Close()
+
 	// Start consumer in a goroutine
 	go func() {
 		if err := s.consumer.Consume(); err != nil {
@@ -125,6 +128,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	queries := repository.New(s.db)
+
 	schedular.StartSchedular(queries, ctx)
 
 	// Wait for shutdown signal or server error
