@@ -73,7 +73,7 @@ func (c *Consumer) Consume() error {
 		if err != nil {
 			fmt.Printf("Error unmarshalling message: %s\n", err)
 			c.handleDLQ(ctx, msg, fmt.Errorf("Error decoding message: %s", err))
-			c.Reader.CommitMessages(ctx, msg)
+			//c.Reader.CommitMessages(ctx, msg)
 		}
 
 		// Process with bounded retries
@@ -129,35 +129,12 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 
 	qtx := c.Queries.WithTx(tx)
 
-	fmt.Printf("Processing message for key %d with type %s %v\n", key, body)
-
-	/*
-canonical_text TEXT,
-	skills_text TEXT,
-	responsibilities_text TEXT,
-	canonical_text_embeddings VECTOR(1536),
-	responsibilities_text_embeddings VECTOR(1536),
-	skills_text_embeddings VECTOR(1536),
-
-        validated_data['canonical_text'] = summary_result.get("canonical_text", "")
-        # Apply skill normalization for better embedding consissency
-        skills_text = summary_result.get("skills_text", "")
-        validated_data['skills_text'] = normalize_skills(skills_text) if skills_text else ""
-        validated_data['responsibilities_text'] = json.dumps(summary_result.get("responsibilities_text", []))
-        
-        # Generate embeddings for all summary components
-        validated_data['canonical_text_embeddings'] = call_ollama_embedding(validated_data['canonical_text']) if validated_data['canonical_text'] else []
-        validated_data['skills_text_embeddings'] = call_ollama_embedding(validated_data['skills_text']) if validated_data['skills_text'] else []
-        validated_data['responsibilities_text_embeddings'] = call_ollama_embedding(validated_data['responsibilities_text']) if validated_data['responsibilities_text'] else []
-
-body.Type)
-	*/
 	switch body.Type {
 	case "job_embedding":
 		if err := qtx.InsertJobEmbedding(
 			ctx,
 			repository.InsertJobEmbeddingParams{
-				JobID:     key,
+				JobID: key,
 				CanonicalText: pgtype.Text{
 					String: body.CanonicalText,
 					Valid:  true,
@@ -170,8 +147,8 @@ body.Type)
 					String: body.ResponsibilitiesText,
 					Valid:  true,
 				},
-				CanonicalTextEmbeddings:       pgvector.NewVector(body.CanonicalTextEmbeddings),
-				SkillsTextEmbeddings:          pgvector.NewVector(body.SkillsTextEmbeddings),
+				CanonicalTextEmbeddings:        pgvector.NewVector(body.CanonicalTextEmbeddings),
+				SkillsTextEmbeddings:           pgvector.NewVector(body.SkillsTextEmbeddings),
 				ResponsibilitiesTextEmbeddings: pgvector.NewVector(body.ResponsibilitiesTextEmbeddings),
 			},
 		); err != nil {
@@ -191,29 +168,32 @@ body.Type)
 			return fmt.Errorf("Error updating CV structured JSON: %s\n", err)
 		}
 
-		if err := qtx.InsertCVEmbedding(
-			ctx,
-			repository.InsertCVEmbeddingParams{
-				CvID:      key,
-				CanonicalText: pgtype.Text{
-					String: body.CanonicalText,
-					Valid:  true,
-				},
-				SkillsText: pgtype.Text{
-					String: body.SkillsText,
-					Valid:  true,
-				},
-				ResponsibilitiesText: pgtype.Text{
-					String: body.ResponsibilitiesText,
-					Valid:  true,
-				},
-				CanonicalTextEmbeddings:       pgvector.NewVector(body.CanonicalTextEmbeddings),
-				SkillsTextEmbeddings:          pgvector.NewVector(body.SkillsTextEmbeddings),
-				ResponsibilitiesTextEmbeddings: pgvector.NewVector(body.ResponsibilitiesTextEmbeddings),
+		// if has canonical text embeddings, insert/update embeddings
 
-			},
-		); err != nil {
-			return fmt.Errorf("Error inserting CV embedding into database: %s\n", err)
+		if body.CanonicalTextEmbeddings != nil {
+			if err := qtx.InsertCVEmbedding(
+				ctx,
+				repository.InsertCVEmbeddingParams{
+					CvID: key,
+					CanonicalText: pgtype.Text{
+						String: body.CanonicalText,
+						Valid:  true,
+					},
+					SkillsText: pgtype.Text{
+						String: body.SkillsText,
+						Valid:  true,
+					},
+					ResponsibilitiesText: pgtype.Text{
+						String: body.ResponsibilitiesText,
+						Valid:  true,
+					},
+					CanonicalTextEmbeddings:        pgvector.NewVector(body.CanonicalTextEmbeddings),
+					SkillsTextEmbeddings:           pgvector.NewVector(body.SkillsTextEmbeddings),
+					ResponsibilitiesTextEmbeddings: pgvector.NewVector(body.ResponsibilitiesTextEmbeddings),
+				},
+			); err != nil {
+				return fmt.Errorf("Error inserting CV embedding into database: %s\n", err)
+			}
 		}
 	}
 

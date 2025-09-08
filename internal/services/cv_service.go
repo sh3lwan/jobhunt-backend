@@ -52,34 +52,42 @@ func (s *CVService) HandleCVUpload(ctx context.Context, originalName string, dat
 
 	if err != nil {
 		fmt.Printf("Error creating CV analysis: %v\n", err)
-		// Update the status to error if creation fails
-
-		return 0, err
+		return 0, s.HandleCVError(ctx, analysis.ID, err)
 	}
 
 	cvData, err := s.Parse(ctx, &analysis)
+
+	analysis.ParsedText = pgtype.Text{String: cvData.RawText, Valid: false}
+
 	if err != nil {
-		return 0, fmt.Errorf("❌ Failed to parse CV: %v", err)
+		return 0, s.HandleCVError(ctx, analysis.ID, err)
 	}
 
-
-	key := fmt.Append(nil, cvData.ID)
-
-	value, err := json.Marshal(cvData)
+	err = s.Analyze(&analysis)
 
 	if err != nil {
-		fmt.Printf("Error marshalling CV data: %v\n", err)
-		return 0, err
-	}
-
-	err = s.producer.Send(key, value)
-
-	if err != nil {
-		fmt.Println("Error sending to kafka producer")
 		return 0, err
 	}
 
 	return analysis.ID, nil
+}
+
+func (s *CVService) AnalyzeCV(ctx context.Context, id int64) error {
+	cv, err := s.repo.GetCVAnalysis(ctx, id)
+
+	if err != nil {
+		return fmt.Errorf("❌ Failed to get CV analysis: %v", err)
+	}
+
+	if cv.ID == 0 {
+		return fmt.Errorf("❌ CV analysis with ID %d not found", id)
+	}
+
+	if cv.Status != "parsed" {
+		return fmt.Errorf("❌ CV analysis with ID %d is not in parsed state", id)
+	}
+
+	return s.Analyze(&cv)
 }
 
 func (s *CVService) ListCVs(ctx context.Context, statuses []string) ([]repository.CvAnalysis, error) {
@@ -112,7 +120,25 @@ func (s *CVService) GetCV(ctx context.Context, id int64) (*repository.CvAnalysis
 func (s *CVService) Analyze(cv *repository.CvAnalysis) error {
 	key := fmt.Append(nil, cv.ID)
 
-	value := []byte(cv.ParsedText.String)
+	var cvData models.CVData
+	err := json.Unmarshal([]byte(cv.ParsedText.String), &cvData)
+
+	if err != nil {
+		return fmt.Errorf("❌ Failed to unmarshal CV parsed text: %v", err)
+	}
+
+	// Create CVAnalysis message
+	//job := models.NewCVAnalysisJob(cvData)
+	value, err := json.Marshal(&models.CVAnalysisJob{
+		BaseJob: models.BaseJob{
+			JobID:   string(key),
+			JobType: "cv_analysis",
+		},
+		Data: models.AnalysisCVData{
+			Text:  cvData.RawText,
+			Links: cvData.Links,
+		},
+	})
 
 	return s.producer.Send(key, value)
 }
@@ -181,27 +207,13 @@ func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis
 	cvData, err := parser.ExtractCV()
 
 	if err != nil {
-		obj, err := json.Marshal(&models.Error{
-			Time:    time.Now(),
-			Message: fmt.Sprintf("Error parsing CV: %v", err),
-		})
-
-		if err != nil {
-			fmt.Printf("Error marshalling CV error at parsing: %v\n", err)
-			return nil, err
-		}
-
-		_ = s.repo.UpdateCVErrors(ctx, repository.UpdateCVErrorsParams{
-			ID:     cvAnalysis.ID,
-			Errors: obj,
-		})
-
-		return nil, fmt.Errorf("error parsing CV: %w", err)
+		return nil, s.HandleCVError(ctx, cvAnalysis.ID, err)
 	}
 
 	cvData.ID = cvAnalysis.ID
 
-	textResult, err := json.Marshal(cvData)
+	textResult, err := json.MarshalIndent(cvData, "", "  ")
+
 	if err != nil {
 		fmt.Printf("Error marshalling CV data: %v\n", err)
 		return nil, err
@@ -236,6 +248,7 @@ func (s *CVService) HandleCVError(ctx context.Context, cvID int64, err error) er
 		Errors: obj,
 	})
 }
+
 func cleanSkills(skills []string) []string {
 	var cleaned []string
 	for _, skill := range skills {

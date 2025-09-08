@@ -245,6 +245,7 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
+	log.Println("Retrying CV processing for CV ID:", cv.ID, "with status:", cv.Status)
 
 	if cv.Status == "uploaded" {
 		_, err = h.cvService.Parse(r.Context(), cv)

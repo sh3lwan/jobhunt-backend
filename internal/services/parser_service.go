@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -23,11 +24,13 @@ type Parser struct {
 type ParseResponse struct {
 	Text  string   `json:"text"`
 	Links []string `json:"links"`
+	Error string   `json:"error,omitempty"`
 }
 
 func (p *Parser) ExtractCV() (*models.CVData, error) {
 	resp, err := p.Parse()
 
+	log.Println("Parser response:", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -59,13 +62,13 @@ func extractPDF(filePath string) (*ParseResponse, error) {
 
 func sendToParserService(pdfFile []byte) (*ParseResponse, error) {
 	body := &bytes.Buffer{}
+
 	writer := multipart.NewWriter(body)
 
 	part, _ := writer.CreateFormFile("file", "cv.pdf")
 	part.Write(pdfFile)
 	writer.Close()
 
-	fmt.Println("Sending to parser ...")
 	req, err := http.NewRequest("POST", parseURL+"parse-pdf", body)
 	if err != nil {
 		fmt.Printf("Error creating parser request: %v\n", err)
@@ -74,20 +77,29 @@ func sendToParserService(pdfFile []byte) (*ParseResponse, error) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	client := &http.Client{}
+
 	resp, err := client.Do(req)
+
+	log.Printf("Parser service response: %+v\n", resp)
 	if err != nil {
-		fmt.Printf("Error receiving resposne from client: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("Error receiving resposne from client: %v", err)
 	}
+
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		err = fmt.Errorf("parser failed with status code %d", resp.StatusCode)
-		return nil, err
+		return nil, fmt.Errorf("parser failed with status code %d", resp.StatusCode)
 	}
 
+	fmt.Printf("Received response from parser service %s", resp.StatusCode)
 	var result ParseResponse
-	json.NewDecoder(resp.Body).Decode(&result)
+
+	err = json.NewDecoder(resp.Body).Decode(&result)
+
+	log.Printf("Parser service response: %+v\n", resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Error decoding parser response: %v\n", err)
+	}
 
 	return &result, nil
 }
