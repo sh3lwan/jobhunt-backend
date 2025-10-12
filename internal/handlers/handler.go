@@ -21,13 +21,15 @@ type Handler struct {
 	cvService        *services.CVService
 	dbJobService     *services.DBJobService
 	embeddingService *services.EmbeddingService
+	authService      *services.AuthService
 }
 
-func NewHandler(queries *repository.Queries, producer *mq.Producer) *Handler {
+func NewHandler(queries *repository.Queries, producer *mq.Producer, authService *services.AuthService) *Handler {
 	return &Handler{
 		cvService:        services.NewCVService(queries, producer),
 		dbJobService:     services.NewDBJobService(queries),
 		embeddingService: services.NewEmbeddingService(producer),
+		authService:      authService,
 	}
 }
 
@@ -35,13 +37,19 @@ func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	conn, err := kafka.Dial("tcp", os.Getenv("KAFKA_BROKER"))
 
 	if err != nil {
-		fmt.Printf("Unreachable %v", err)
+		utils.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status": "error",
+			"error":  "Kafka is unreachable: " + err.Error(),
+		})
 		return
 	}
 
-	fmt.Println("Kafka is reachable 🎉")
 	conn.Close()
-	w.Write([]byte("online"))
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"msg":    "Service is healthy",
+	})
 }
 
 func (h *Handler) StreamCVStatus(w http.ResponseWriter, r *http.Request) {
@@ -66,8 +74,14 @@ func (h *Handler) StreamCVStatus(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			// Pull latest CVs
-			cvs, err := h.cvService.ListCVs(r.Context(), nil)
+			user, err := utils.GetUserFromContext(r.Context())
+
+			if err != nil {
+				fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+				flusher.Flush()
+				continue
+			}
+			cvs, err := h.cvService.ListCVs(r.Context(), nil, user.ID)
 			if err != nil {
 				fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
 				flusher.Flush()
@@ -130,10 +144,29 @@ func (h *Handler) UploadCV(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListCVs(w http.ResponseWriter, r *http.Request) {
-	cvs, err := h.cvService.ListCVs(r.Context(), nil)
+	user, err := utils.GetUserFromContext(r.Context())
 
 	if err != nil {
-		fmt.Println(err)
+		utils.RespondJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "Unauthorized: " + err.Error(),
+		})
+		return
+	}
+
+	cvs, err := h.cvService.ListCVs(r.Context(), nil, user.ID)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if len(cvs) == 0 {
+		utils.RespondJSON(w, http.StatusOK, map[string]any{
+			"cvs": []repository.CvAnalysis{},
+		})
+		return
 	}
 
 	utils.RespondJSON(w, http.StatusOK, map[string]any{
@@ -245,12 +278,15 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
+
 	log.Println("Retrying CV processing for CV ID:", cv.ID, "with status:", cv.Status)
 
 	if cv.Status == "uploaded" {
 		_, err = h.cvService.Parse(r.Context(), cv)
 
+
 		if err != nil {
+			h.cvService.HandleCVError(r.Context(), cv.ID, err)
 			utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 			return
 		}
@@ -259,6 +295,7 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 	if cv.Status == "parsed" {
 		err = h.cvService.Analyze(cv)
 		if err != nil {
+			h.cvService.HandleCVError(r.Context(), cv.ID, err)
 			utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 			return
 		}
@@ -281,7 +318,7 @@ func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		
+
 		for _, job := range jobs {
 			// Convert job to JSON
 			data, err := json.Marshal(job)
@@ -367,4 +404,44 @@ func (h *Handler) EmbedJob(w http.ResponseWriter, r *http.Request) {
 		"message": "Jobs embedded successfully",
 	})
 
+}
+
+func (h *Handler) Authenticate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var creds struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&creds)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	u, err := h.authService.ValidateUser(r.Context(), creds.Username, creds.Password)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	token, err := h.authService.Generate(u)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "Failed to generate token",
+		})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{
+		"token": token,
+	})
 }

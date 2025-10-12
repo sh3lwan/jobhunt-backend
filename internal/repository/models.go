@@ -16,6 +16,7 @@ type CvAnalysis struct {
 	ParsedText     pgtype.Text
 	StructuredJson []byte
 	Status         string
+	UserID         pgtype.Int8
 	CreatedAt      pgtype.Timestamp
 	UpdatedAt      pgtype.Timestamp
 	Errors         []byte
@@ -37,8 +38,8 @@ type CvJobMatch struct {
 	CvID       int64
 	JobID      int64
 	Percentage pgtype.Numeric
-	CreatedAt  interface{}
-	UpdatedAt  interface{}
+	CreatedAt  pgtype.Timestamp
+	UpdatedAt  pgtype.Timestamp
 }
 
 type Job struct {
@@ -67,4 +68,13 @@ type JobsEmbedding struct {
 	ResponsibilitiesTextEmbeddings pgvector.Vector
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
+}
+
+type User struct {
+	ID        int64
+	Username  string
+	Email     string
+	Password  string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }

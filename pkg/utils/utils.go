@@ -1,9 +1,15 @@
 package utils
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/sh3lwan/jobhunter/internal/models"
 )
 
 func RespondJSON(w http.ResponseWriter, status int, payload any) {
@@ -18,4 +24,28 @@ func GetEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func GetUserFromContext(c context.Context) (*models.User, error) {
+	claims, ok := c.Value("claims").(jwt.MapClaims)
+
+	if !ok {
+		return nil, errors.New("no claims found in context")
+	}
+
+	userId, ok := claims["sub"].(float64)
+
+	if !ok {
+		return nil, fmt.Errorf("sub claim not found")
+	}
+
+	username, err := claims.GetIssuer()
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.User{
+		ID:       int64(userId),
+		Username: username,
+	}, nil
 }

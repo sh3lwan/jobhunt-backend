@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sh3lwan/jobhunter/internal/models"
+	"github.com/sh3lwan/jobhunter/pkg/utils"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -39,8 +40,15 @@ func (s *CVService) HandleCVUpload(ctx context.Context, originalName string, dat
 	// store file in disk inside project directory
 	uploadsvr := NewUploadFileService(baseDir)
 	_, err := uploadsvr.SaveFile(fileName, data)
+
 	if err != nil {
 		return 0, fmt.Errorf("❌ Failed to save CV file: %v", err)
+	}
+
+	contextUser, err := utils.GetUserFromContext(ctx)
+
+	if err != nil {
+		return 0, fmt.Errorf("❌ Failed to get user from context: %v", err)
 	}
 
 	analysis, err := s.repo.CreateCVAnalysis(ctx, repository.CreateCVAnalysisParams{
@@ -48,20 +56,20 @@ func (s *CVService) HandleCVUpload(ctx context.Context, originalName string, dat
 		OriginalName: originalName,
 		ParsedText:   pgtype.Text{Valid: false},
 		Status:       "uploaded",
+		UserID:       pgtype.Int8{Int64: contextUser.ID, Valid: true},
 	})
 
 	if err != nil {
-		fmt.Printf("Error creating CV analysis: %v\n", err)
-		return 0, s.HandleCVError(ctx, analysis.ID, err)
+		return 0, fmt.Errorf("❌ Failed to create CV analysis record: %v", err)
 	}
 
 	cvData, err := s.Parse(ctx, &analysis)
 
-	analysis.ParsedText = pgtype.Text{String: cvData.RawText, Valid: false}
-
-	if err != nil {
-		return 0, s.HandleCVError(ctx, analysis.ID, err)
+	if err != nil || cvData == nil {
+		return 0, err
 	}
+
+	analysis.ParsedText = pgtype.Text{String: cvData.RawText, Valid: false}
 
 	err = s.Analyze(&analysis)
 
@@ -90,13 +98,14 @@ func (s *CVService) AnalyzeCV(ctx context.Context, id int64) error {
 	return s.Analyze(&cv)
 }
 
-func (s *CVService) ListCVs(ctx context.Context, statuses []string) ([]repository.CvAnalysis, error) {
+func (s *CVService) ListCVs(ctx context.Context, statuses []string, userId int64) ([]repository.CvAnalysis, error) {
 	if (statuses == nil) || (len(statuses) == 0) {
 		statuses = []string{"uploaded", "parsed", "analyzed", "error"}
 	}
 
 	return s.repo.GetAllCVAnalysis(
 		ctx, repository.GetAllCVAnalysisParams{
+			UserID:  pgtype.Int8{Int64: userId, Valid: true},
 			Limit:   10,
 			Offset:  0,
 			Column3: statuses,
@@ -128,7 +137,6 @@ func (s *CVService) Analyze(cv *repository.CvAnalysis) error {
 	}
 
 	// Create CVAnalysis message
-	//job := models.NewCVAnalysisJob(cvData)
 	value, err := json.Marshal(&models.CVAnalysisJob{
 		BaseJob: models.BaseJob{
 			JobID:   string(key),
@@ -197,7 +205,6 @@ func (s *CVService) GetSkillsForCV(ctx context.Context, id int64) ([]string, err
 }
 
 func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis) (*models.CVData, error) {
-
 	uploadsvr := NewUploadFileService(baseDir)
 
 	filePath := uploadsvr.GetFilePath(cvAnalysis.FileName)
@@ -207,7 +214,7 @@ func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis
 	cvData, err := parser.ExtractCV()
 
 	if err != nil {
-		return nil, s.HandleCVError(ctx, cvAnalysis.ID, err)
+		return nil, err
 	}
 
 	cvData.ID = cvAnalysis.ID
@@ -215,7 +222,6 @@ func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis
 	textResult, err := json.MarshalIndent(cvData, "", "  ")
 
 	if err != nil {
-		fmt.Printf("Error marshalling CV data: %v\n", err)
 		return nil, err
 	}
 
@@ -225,7 +231,6 @@ func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis
 	})
 
 	if err != nil {
-		fmt.Printf("Error updating CV status: %v\n", err)
 		return nil, err
 	}
 
@@ -235,11 +240,10 @@ func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis
 func (s *CVService) HandleCVError(ctx context.Context, cvID int64, err error) error {
 	obj, err := json.Marshal(&models.Error{
 		Time:    time.Now(),
-		Message: fmt.Sprintf("Error processing CV: %v", err),
+		Message: err.Error(),
 	})
 
 	if err != nil {
-		fmt.Printf("Error marshalling CV error: %v\n", err)
 		return err
 	}
 

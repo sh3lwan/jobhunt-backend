@@ -13,8 +13,8 @@ import (
 )
 
 const createCVAnalysis = `-- name: CreateCVAnalysis :one
-INSERT INTO cv_analyses (file_name, original_name, parsed_text, status)
-VALUES ($1, $2, $3, $4) RETURNING id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at, errors
+INSERT INTO cv_analyses (file_name, original_name, parsed_text, status, user_id)
+VALUES ($1, $2, $3, $4, $5) RETURNING id, original_name, file_name, parsed_text, structured_json, status, user_id, created_at, updated_at, errors
 `
 
 type CreateCVAnalysisParams struct {
@@ -22,6 +22,7 @@ type CreateCVAnalysisParams struct {
 	OriginalName string
 	ParsedText   pgtype.Text
 	Status       string
+	UserID       pgtype.Int8
 }
 
 func (q *Queries) CreateCVAnalysis(ctx context.Context, arg CreateCVAnalysisParams) (CvAnalysis, error) {
@@ -30,6 +31,7 @@ func (q *Queries) CreateCVAnalysis(ctx context.Context, arg CreateCVAnalysisPara
 		arg.OriginalName,
 		arg.ParsedText,
 		arg.Status,
+		arg.UserID,
 	)
 	var i CvAnalysis
 	err := row.Scan(
@@ -39,6 +41,7 @@ func (q *Queries) CreateCVAnalysis(ctx context.Context, arg CreateCVAnalysisPara
 		&i.ParsedText,
 		&i.StructuredJson,
 		&i.Status,
+		&i.UserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Errors,
@@ -47,9 +50,10 @@ func (q *Queries) CreateCVAnalysis(ctx context.Context, arg CreateCVAnalysisPara
 }
 
 const getAllCVAnalysis = `-- name: GetAllCVAnalysis :many
-SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at, errors
+SELECT id, original_name, file_name, parsed_text, structured_json, status, user_id, created_at, updated_at, errors
 FROM cv_analyses
 WHERE ($3::text[] IS NULL OR status = ANY($3))
+AND user_id = $4
 ORDER BY created_at DESC LIMIT $1
 OFFSET $2
 `
@@ -58,10 +62,16 @@ type GetAllCVAnalysisParams struct {
 	Limit   int32
 	Offset  int32
 	Column3 []string
+	UserID  pgtype.Int8
 }
 
 func (q *Queries) GetAllCVAnalysis(ctx context.Context, arg GetAllCVAnalysisParams) ([]CvAnalysis, error) {
-	rows, err := q.db.Query(ctx, getAllCVAnalysis, arg.Limit, arg.Offset, arg.Column3)
+	rows, err := q.db.Query(ctx, getAllCVAnalysis,
+		arg.Limit,
+		arg.Offset,
+		arg.Column3,
+		arg.UserID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +86,7 @@ func (q *Queries) GetAllCVAnalysis(ctx context.Context, arg GetAllCVAnalysisPara
 			&i.ParsedText,
 			&i.StructuredJson,
 			&i.Status,
+			&i.UserID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Errors,
@@ -91,7 +102,7 @@ func (q *Queries) GetAllCVAnalysis(ctx context.Context, arg GetAllCVAnalysisPara
 }
 
 const getCVAnalysis = `-- name: GetCVAnalysis :one
-SELECT id, original_name, file_name, parsed_text, structured_json, status, created_at, updated_at, errors
+SELECT id, original_name, file_name, parsed_text, structured_json, status, user_id, created_at, updated_at, errors
 FROM cv_analyses
 WHERE id = $1
 `
@@ -106,6 +117,7 @@ func (q *Queries) GetCVAnalysis(ctx context.Context, id int64) (CvAnalysis, erro
 		&i.ParsedText,
 		&i.StructuredJson,
 		&i.Status,
+		&i.UserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Errors,
@@ -229,7 +241,8 @@ func (q *Queries) InsertCVEmbedding(ctx context.Context, arg InsertCVEmbeddingPa
 
 const updateCVErrors = `-- name: UpdateCVErrors :exec
 UPDATE cv_analyses
-SET errors = $2
+SET errors = $2,
+    status = 'error'
 WHERE id = $1
 `
 
@@ -246,7 +259,8 @@ func (q *Queries) UpdateCVErrors(ctx context.Context, arg UpdateCVErrorsParams) 
 const updateCVParsedText = `-- name: UpdateCVParsedText :exec
 UPDATE cv_analyses
 SET parsed_text = $2,
-    status      = 'parsed'
+    status      = 'parsed',
+    errors      = NULL
 WHERE id = $1
 `
 
@@ -279,7 +293,8 @@ func (q *Queries) UpdateCVStatus(ctx context.Context, arg UpdateCVStatusParams) 
 const updateCVStructuredJSON = `-- name: UpdateCVStructuredJSON :exec
 UPDATE cv_analyses
 SET structured_json = $2,
-    status          = 'analyzed'
+    status          = 'analyzed',
+    errors          = NULL
 WHERE id = $1
 `
 

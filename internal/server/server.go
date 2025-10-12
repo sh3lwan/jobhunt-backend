@@ -15,6 +15,7 @@ import (
 	"github.com/sh3lwan/jobhunter/internal/repository"
 	"github.com/sh3lwan/jobhunter/internal/router"
 	"github.com/sh3lwan/jobhunter/internal/schedular"
+	"github.com/sh3lwan/jobhunter/internal/services"
 )
 
 type Config struct {
@@ -23,6 +24,7 @@ type Config struct {
 	KafkaBroker string
 	CVTopic     string
 	ResultTopic string
+	JwtSecret    string
 
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
@@ -49,17 +51,21 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 	// Create message queue components
 	producer := mq.NewProducer(config.KafkaBroker, config.CVTopic)
 
-	//defer producer.Close()
-
 	// Create repository
 	queries := repository.New(db)
 
 	// Create consumer
 	consumer := mq.NewConsumer(queries, db, config.ResultTopic, config.KafkaBroker)
+	
+	// Create services
+	fmt.Println("JWT Secret:", config.JwtSecret)
+	authService := services.NewAuthService(config.JwtSecret, queries)
 
-	h := handlers.NewHandler(queries, producer)
+	h := handlers.NewHandler(queries, producer, authService)
 
-	mux := router.NewRouter(h)
+	authMiddleware := middleware.NewAuthMiddleware(authService)
+
+	mux := router.NewRouter(h, authMiddleware)
 
 	handler := middleware.CORS(mux)
 
@@ -79,12 +85,12 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 	}
 
 	return &Server{
-		config:   config,
-		server:   httpServer,
-		consumer: consumer,
-		producer: producer,
-		db:       db,
-		logger:   logger,
+		config:    config,
+		server:    httpServer,
+		consumer:  consumer,
+		producer:  producer,
+		db:        db,
+		logger:    logger,
 	}, nil
 }
 

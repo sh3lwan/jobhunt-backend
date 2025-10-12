@@ -62,6 +62,7 @@ func loadEnvironmentVariables() (*server.Config, error) {
 		KafkaBroker: utils.GetEnvOrDefault("KAFKA_BROKER", ""),
 		CVTopic:     utils.GetEnvOrDefault("KAFKA_CV_TOPIC", ""),
 		ResultTopic: utils.GetEnvOrDefault("KAFKA_RESULT_TOPIC", ""),
+		JwtSecret:  utils.GetEnvOrDefault("JWT_SECRET", ""),
 	}
 
 	err = validateConfig(config)

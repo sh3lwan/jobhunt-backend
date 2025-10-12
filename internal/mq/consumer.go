@@ -63,11 +63,7 @@ func (c *Consumer) Consume() error {
 			continue
 		}
 
-		fmt.Printf("Received message with key: %d\n", key)
-
 		var body models.EmbeddingResponse
-
-		fmt.Printf("Message value: %s\n", string(msg.Value))
 		err = json.Unmarshal(msg.Value, &body)
 
 		if err != nil {
@@ -159,6 +155,7 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 
 	default:
 		// remove embeddings from json before storing
+		log.Printf("Processing CV embedding for CV ID %d\n", key)
 		if err := qtx.UpdateCVStructuredJSON(
 			ctx,
 			repository.UpdateCVStructuredJSONParams{

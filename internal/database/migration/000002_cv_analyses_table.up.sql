@@ -6,6 +6,7 @@ CREATE TABLE cv_analyses
     parsed_text     TEXT,
     structured_json JSONB,
     status          TEXT      NOT NULL CHECK (status IN ('uploaded', 'parsed', 'analyzed', 'error')),
+    user_id         BIGINT REFERENCES users(id),
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

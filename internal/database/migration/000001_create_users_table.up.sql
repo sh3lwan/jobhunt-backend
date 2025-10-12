@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS users
+(
+    id  BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    username  VARCHAR(50) NOT NULL UNIQUE,
+    email     TEXT    NOT NULL UNIQUE,
+    password  TEXT    NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);

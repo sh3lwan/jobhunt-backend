@@ -1,6 +1,6 @@
 -- name: CreateCVAnalysis :one
-INSERT INTO cv_analyses (file_name, original_name, parsed_text, status)
-VALUES ($1, $2, $3, $4) RETURNING *;
+INSERT INTO cv_analyses (file_name, original_name, parsed_text, status, user_id)
+VALUES ($1, $2, $3, $4, $5) RETURNING *;
 
 -- name: GetCVAnalysis :one
 SELECT *
@@ -11,19 +11,22 @@ WHERE id = $1;
 SELECT *
 FROM cv_analyses
 WHERE ($3::text[] IS NULL OR status = ANY($3))
+AND user_id = $4
 ORDER BY created_at DESC LIMIT $1
 OFFSET $2;
 
 -- name: UpdateCVParsedText :exec
 UPDATE cv_analyses
 SET parsed_text = $2,
-    status      = 'parsed'
+    status      = 'parsed',
+    errors      = NULL
 WHERE id = $1;
 
 -- name: UpdateCVStructuredJSON :exec
 UPDATE cv_analyses
 SET structured_json = $2,
-    status          = 'analyzed'
+    status          = 'analyzed',
+    errors          = NULL
 WHERE id = $1;
 
 -- name: UpdateCVStatus :exec
@@ -33,7 +36,8 @@ WHERE id = $1;
 
 -- name: UpdateCVErrors :exec
 UPDATE cv_analyses
-SET errors = $2
+SET errors = $2,
+    status = 'error'
 WHERE id = $1;
 
 -- name: InsertCVEmbedding :exec
