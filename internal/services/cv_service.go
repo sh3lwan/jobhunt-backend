@@ -171,7 +171,7 @@ func (s *CVService) FetchJobs(skills []string) {
 
 		fmt.Printf("Received %d jobs\n", len(jobs))
 
-		err = dbjobService.SaveJobs(s.repo, ctx, jobs)
+		err = dbjobService.SaveJobs(ctx, jobs)
 
 		if err != nil {
 			fmt.Printf("Something went wrong on saving: %v\n", err)

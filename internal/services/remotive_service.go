@@ -26,7 +26,7 @@ func NewRemotiveService() *RemotiveService {
 }
 
 func (s *RemotiveService) Search(skills []string) ([]Job, error) {
-	resp, err := s.call("search", strings.Join(skills, ","))
+	resp, err := s.call("search", strings.Join(skills[:1], ","))
 
 	if err != nil {
 		return nil, err
@@ -73,14 +73,36 @@ func (s *RemotiveService) Search(skills []string) ([]Job, error) {
 }
 
 func parsePublishDate(dateStr string) time.Time {
-	c := carbon.ParseByFormat(dateStr, "2006-01-02T15:04:05") // parse exactly
-	if c.IsZero() {
-		return time.Time{} // zero time
+	// Try multiple parsing methods
+
+	// Method 1: Use standard Go time parsing (most reliable)
+	if t, err := time.Parse("2006-01-02T15:04:05", dateStr); err == nil {
+		return t
 	}
-	c.SetTimezone("UTC") // set timezone explicitly
-	return c.ToStdTime()
+
+	// Method 2: Try with Carbon's smart parsing
+	c := carbon.Parse(dateStr, "UTC")
+	if !c.IsZero() {
+		return c.ToStdTime()
+	}
+
+	// Method 3: Try different format variations
+	formats := []string{
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02 15:04:05",
+	}
+
+	for _, format := range formats {
+		if t, err := time.Parse(format, dateStr); err == nil {
+			return t
+		}
+	}
+
+	// If all parsing fails, return current time as fallback
+	return time.Now()
 }
 
 func (s *RemotiveService) CollectJobs(q *repository.Queries, ctx context.Context, skills []string) ([]repository.Job, error) {
- 	return NewRemotiveService().Search(skills)
+	return NewRemotiveService().Search(skills)
 }

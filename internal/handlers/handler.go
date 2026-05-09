@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"github.com/sh3lwan/jobhunter/internal/models"
 	"github.com/sh3lwan/jobhunter/internal/mq"
 	"github.com/sh3lwan/jobhunter/internal/repository"
 	"github.com/sh3lwan/jobhunter/internal/services"
@@ -256,10 +257,35 @@ func (h *Handler) FetchJobsForCV(w http.ResponseWriter, r *http.Request) {
 
 	skills, err := h.cvService.GetSkillsForCV(r.Context(), id)
 
-	go h.cvService.FetchJobs(skills)
+	//utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "success", "msg": "Skills fetched", "skills": strings.Join(skills, ",")})
+	//return
+	//go h.cvService.FetchJobs(skills)
 
-	utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "succes", "msg": "Fetch job started"})
+	//utils.RespondJSON(w, http.StatusOK, map[string]string{"status": "succes", "msg": "Fetch job started"})
+	remotive := services.NewRemotiveService()
 
+	jobs, err := remotive.Search(skills)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Save jobs to DB
+	err = h.dbJobService.SaveJobs(r.Context(), jobs)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{
+		"jobs": jobs,
+	})
 }
 
 func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
@@ -279,11 +305,8 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("Retrying CV processing for CV ID:", cv.ID, "with status:", cv.Status)
-
 	if cv.Status == "uploaded" {
 		_, err = h.cvService.Parse(r.Context(), cv)
-
 
 		if err != nil {
 			h.cvService.HandleCVError(r.Context(), cv.ID, err)
@@ -296,7 +319,18 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 		err = h.cvService.Analyze(cv)
 		if err != nil {
 			h.cvService.HandleCVError(r.Context(), cv.ID, err)
-			utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+			utils.RespondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	if cv.Status == "analyzed" {
+		// Send the job data for embedding
+		err = h.embeddingService.SendEmbeddingRequest(string(cv.ID), cv.ParsedText.String, models.CVEmbeddingType)
+
+		if err != nil {
+			h.cvService.HandleCVError(r.Context(), cv.ID, err)
+			utils.RespondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
@@ -308,7 +342,7 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := h.dbJobService.ListJobs(r.Context(), 100, 0)
 
-	//jobs = jobs[:1] // For testing purposes, limit to 10 jobs
+	jobs = jobs[:1] // For testing purposes, limit to 10 jobs
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -317,44 +351,31 @@ func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go func() {
+	//go func() {
 
-		for _, job := range jobs {
-			// Convert job to JSON
-			data, err := json.Marshal(job)
-			if err != nil {
-				utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
-					"error": "Failed to marshal job: " + err.Error(),
-				})
-				return
-			}
-
-			// Send the job data for embedding
-			key := fmt.Append(nil, job.ID)
-
-			err = h.embeddingService.SendEmbeddingRequest(key, data)
-
-			if err != nil {
-				log.Println("Failed to send embedding request for job ID", job.ID, ":", err)
-				continue
-			}
-
-			log.Println("Sent job for embedding:", job.ID, job.Title)
+	for _, job := range jobs {
+		// Convert job to JSON
+		data, err := json.Marshal(job)
+		if err != nil {
+			utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": "Failed to marshal job: " + err.Error(),
+			})
+			return
 		}
-	}()
 
-	//key := []byte(jobs[0].ID) // Use the first job ID as the key for the embedding request
-	//err = h.embeddingService.SendEmbeddingRequest(job.ID, data []byte)
+		err = h.embeddingService.SendEmbeddingRequest(string(job.ID), string(data), models.JobEmbeddingType)
 
-	//	if err != nil {
-	//		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
-	//			"error": err.Error(),
-	//		})
-	//		return
-	//	}
+		if err != nil {
+			log.Println("Failed to send embedding request for job ID", job.ID, ":", err)
+			continue
+		}
+
+		log.Println("Sent job for embedding:", job.ID, job.Title)
+	}
+	//}()
 
 	utils.RespondJSON(w, http.StatusOK, map[string]string{
-		"message": "Jobs embedded successfully",
+		"message": "Jobs embedded initiated successfully",
 	})
 
 }
@@ -388,10 +409,7 @@ func (h *Handler) EmbedJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send the job data for embedding
-	key := fmt.Append(nil, job.ID)
-
-	err = h.embeddingService.SendEmbeddingRequest(key, data)
+	err = h.embeddingService.SendEmbeddingRequest(string(job.ID), string(data), models.JobEmbeddingType)
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -443,5 +461,41 @@ func (h *Handler) Authenticate(w http.ResponseWriter, r *http.Request) {
 
 	utils.RespondJSON(w, http.StatusOK, map[string]string{
 		"token": token,
+	})
+}
+
+func (h *Handler) EmbedCV(w http.ResponseWriter, r *http.Request) {
+	cvId := r.PathValue("id")
+
+	id, err := strconv.ParseInt(cvId, 10, 64)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	cv, err := h.cvService.GetCV(r.Context(), id)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	err = h.embeddingService.SendEmbeddingRequest(string(cvId), cv.ParsedText.String, models.CVEmbeddingType)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{
+		"message": "CV analysis happening now",
 	})
 }

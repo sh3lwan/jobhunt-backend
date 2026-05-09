@@ -2,6 +2,8 @@ package models
 
 import "time"
 
+const CVEmbeddingType = "cv_analysis"
+
 type CVData struct {
 	ID             int64    `json:"id"` // Unique identifier for tracking
 	Name           string   `json:"name"`
@@ -49,7 +51,7 @@ type ResponseCVData struct {
 }
 
 type EmbeddingResponse struct {
-	ID                             int64     `json:"id"`                               // Unique identifier for tracking
+	//ID                             int64     `json:"id"`                               // Unique identifier for tracking
 	Type                           string    `json:"type"`                             // Type of the response (e.g., "embedding_response")
 	CanonicalText                  string    `json:"canonical_text"`                   // Canonical text used for generating the embedding
 	SkillsText                     string    `json:"skills_text"`                      // Skills text used for generating the embedding
@@ -64,4 +66,3 @@ type Error struct {
 	Code    int       `json:"code"`
 	Time    time.Time `json:"time"` // ISO 8601 format
 }
-

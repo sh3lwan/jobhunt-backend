@@ -7,9 +7,9 @@ CREATE TABLE IF NOT EXISTS jobs_embeddings (
     canonical_text TEXT,
     skills_text TEXT,
     responsibilities_text TEXT,
-    canonical_text_embeddings VECTOR(768),
-    skills_text_embeddings VECTOR(768),
-    responsibilities_text_embeddings VECTOR(768),
+    canonical_text_embeddings VECTOR(768) DEFAULT NULL,
+    skills_text_embeddings VECTOR(768) DEFAULT NULL,
+    responsibilities_text_embeddings VECTOR(768) DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );

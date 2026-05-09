@@ -47,8 +47,6 @@ func (s *DBJobService) ListJobs(ctx context.Context, limit, offset int32) ([]mod
 			cvIds = append(cvIds, cv.ID)
 			break // Only consider the first CV for now
 		}
-		fmt.Println("CV IDS: ", cvIds)
-
 		// Get all cv-job pairs for the given cv ids
 		cvJobPairs, err := s.queries.GetJobMatchesByCvIds(ctx, cvIds)
 
@@ -68,7 +66,6 @@ func (s *DBJobService) ListJobs(ctx context.Context, limit, offset int32) ([]mod
 		}
 	}
 
-	fmt.Println("PAAAAAIRRR", jobIdSet[3754]);
 	var jobList = make([]models.Job, 0, len(jobs))
 
 	for _, job := range jobs {
@@ -102,9 +99,9 @@ func (s *DBJobService) ListJobs(ctx context.Context, limit, offset int32) ([]mod
 	return jobList, nil
 }
 
-func (s *DBJobService) SaveJobs(q *repository.Queries, ctx context.Context, jobs []repository.Job) error {
+func (s *DBJobService) SaveJobs(ctx context.Context, jobs []repository.Job) error {
 	for _, job := range jobs {
-		err := q.CreateJob(ctx, repository.CreateJobParams{
+		err := s.queries.CreateJob(ctx, repository.CreateJobParams{
 			SourceID:    job.SourceID,
 			Title:       job.Title,
 			Source:      job.Source,

@@ -9,7 +9,6 @@ import (
 
 func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *http.ServeMux {
 	mux := http.NewServeMux()
-
 	protected := func(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 		mux.Handle(pattern, authMiddleware.RequireAuth(http.HandlerFunc(handler)))
 	}
@@ -23,6 +22,7 @@ func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *
 	// CV Processing
 	protected("POST /api/v1/cvs", h.UploadCV)
 	protected("GET /api/v1/cvs", h.ListCVs)
+	protected("POST /api/v1/cvs/{id}/embed", h.EmbedCV)
 	protected("POST /api/v1/cvs/{id}/fetch", h.FetchJobsForCV)
 	protected("POST /api/v1/cvs/{id}/retry", h.RetryCVProceassing)
 	protected("POST /api/v1/cvs/{id}/match", h.EmbeddJobs)

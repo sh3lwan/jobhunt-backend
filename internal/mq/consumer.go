@@ -69,13 +69,14 @@ func (c *Consumer) Consume() error {
 		if err != nil {
 			fmt.Printf("Error unmarshalling message: %s\n", err)
 			c.handleDLQ(ctx, msg, fmt.Errorf("Error decoding message: %s", err))
-			//c.Reader.CommitMessages(ctx, msg)
+			c.Reader.CommitMessages(ctx, msg)
 		}
 
 		// Process with bounded retries
 		const maxAttempts = 5
 		var lastErr error
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			log.Printf("Processing message with key %d, data: %+v (attempt %d/%d)\n", key, body, attempt, maxAttempts)
 			if err := c.processMessage(ctx, key, body, msg.Value); err != nil {
 				lastErr = err
 				fmt.Printf("Error processing message (attempt %d/%d): %s\n", attempt, maxAttempts, err)
@@ -126,27 +127,30 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 	qtx := c.Queries.WithTx(tx)
 
 	switch body.Type {
-	case "job_embedding":
+	case models.JobEmbeddingType:
+		log.Printf("Processing Job embedding for Job ID %d\n", key)
+		params := repository.InsertJobEmbeddingParams{
+			JobID: key,
+			CanonicalText: pgtype.Text{
+				String: body.CanonicalText,
+				Valid:  true,
+			},
+			SkillsText: pgtype.Text{
+				String: body.SkillsText,
+				Valid:  true,
+			},
+			ResponsibilitiesText: pgtype.Text{
+				String: body.ResponsibilitiesText,
+				Valid:  true,
+			},
+			CanonicalTextEmbeddings:        createOrEmptyVector(body.CanonicalTextEmbeddings),
+			SkillsTextEmbeddings:           createOrEmptyVector(body.SkillsTextEmbeddings),
+			ResponsibilitiesTextEmbeddings: createOrEmptyVector(body.ResponsibilitiesTextEmbeddings),
+		}
+
 		if err := qtx.InsertJobEmbedding(
 			ctx,
-			repository.InsertJobEmbeddingParams{
-				JobID: key,
-				CanonicalText: pgtype.Text{
-					String: body.CanonicalText,
-					Valid:  true,
-				},
-				SkillsText: pgtype.Text{
-					String: body.SkillsText,
-					Valid:  true,
-				},
-				ResponsibilitiesText: pgtype.Text{
-					String: body.ResponsibilitiesText,
-					Valid:  true,
-				},
-				CanonicalTextEmbeddings:        pgvector.NewVector(body.CanonicalTextEmbeddings),
-				SkillsTextEmbeddings:           pgvector.NewVector(body.SkillsTextEmbeddings),
-				ResponsibilitiesTextEmbeddings: pgvector.NewVector(body.ResponsibilitiesTextEmbeddings),
-			},
+			params,
 		); err != nil {
 			return fmt.Errorf("Error inserting job embedding into database: %s\n", err)
 		}
@@ -166,7 +170,6 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 		}
 
 		// if has canonical text embeddings, insert/update embeddings
-
 		if body.CanonicalTextEmbeddings != nil {
 			if err := qtx.InsertCVEmbedding(
 				ctx,
@@ -184,9 +187,9 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 						String: body.ResponsibilitiesText,
 						Valid:  true,
 					},
-					CanonicalTextEmbeddings:        pgvector.NewVector(body.CanonicalTextEmbeddings),
-					SkillsTextEmbeddings:           pgvector.NewVector(body.SkillsTextEmbeddings),
-					ResponsibilitiesTextEmbeddings: pgvector.NewVector(body.ResponsibilitiesTextEmbeddings),
+					CanonicalTextEmbeddings:        createOrEmptyVector(body.CanonicalTextEmbeddings),
+					SkillsTextEmbeddings:           createOrEmptyVector(body.SkillsTextEmbeddings),
+					ResponsibilitiesTextEmbeddings: createOrEmptyVector(body.ResponsibilitiesTextEmbeddings),
 				},
 			); err != nil {
 				return fmt.Errorf("Error inserting CV embedding into database: %s\n", err)
@@ -202,4 +205,12 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 	log.Printf("Successfully processed message with key %d", key)
 
 	return nil
+}
+
+func createOrEmptyVector(vector []float32) pgvector.Vector {
+	if len(vector) == 0 || vector == nil {
+		zeros := make([]float32, 768)
+		return pgvector.NewVector(zeros)
+	}
+	return pgvector.NewVector(vector)
 }
