@@ -34,6 +34,14 @@ UPDATE cv_analyses
 SET status = $2
 WHERE id = $1;
 
+-- Manual user edit of the parsed CV — updates only the JSON, leaving status
+-- untouched (unlike UpdateCVStructuredJSON, which flips status to 'analyzed').
+-- name: UpdateCVStructuredJSONManual :exec
+UPDATE cv_analyses
+SET structured_json = $2,
+    updated_at      = CURRENT_TIMESTAMP
+WHERE id = $1 AND user_id = $3;
+
 -- name: UpdateCVErrors :exec
 UPDATE cv_analyses
 SET errors = $2,

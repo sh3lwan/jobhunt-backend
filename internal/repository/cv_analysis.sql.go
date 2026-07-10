@@ -307,3 +307,23 @@ func (q *Queries) UpdateCVStructuredJSON(ctx context.Context, arg UpdateCVStruct
 	_, err := q.db.Exec(ctx, updateCVStructuredJSON, arg.ID, arg.StructuredJson)
 	return err
 }
+
+const updateCVStructuredJSONManual = `-- name: UpdateCVStructuredJSONManual :exec
+UPDATE cv_analyses
+SET structured_json = $2,
+    updated_at      = CURRENT_TIMESTAMP
+WHERE id = $1 AND user_id = $3
+`
+
+type UpdateCVStructuredJSONManualParams struct {
+	ID             int64
+	StructuredJson []byte
+	UserID         pgtype.Int8
+}
+
+// Manual user edit of the parsed CV — updates only the JSON, leaving status
+// untouched (unlike UpdateCVStructuredJSON, which flips status to 'analyzed').
+func (q *Queries) UpdateCVStructuredJSONManual(ctx context.Context, arg UpdateCVStructuredJSONManualParams) error {
+	_, err := q.db.Exec(ctx, updateCVStructuredJSONManual, arg.ID, arg.StructuredJson, arg.UserID)
+	return err
+}

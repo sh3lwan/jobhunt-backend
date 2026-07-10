@@ -15,6 +15,8 @@ func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *
 
 	// Public routes
 	mux.HandleFunc("POST /api/v1/auth/login", h.Authenticate)
+	mux.HandleFunc("GET /api/v1/auth/google", h.GoogleAuthStart)
+	mux.HandleFunc("GET /api/v1/auth/google/callback", h.GoogleAuthCallback)
 
 	// Health Check
 	protected("GET /api/v1/health", h.HealthCheck)
@@ -22,6 +24,8 @@ func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *
 	// CV Processing
 	protected("POST /api/v1/cvs", h.UploadCV)
 	protected("GET /api/v1/cvs", h.ListCVs)
+	protected("GET /api/v1/cvs/{id}", h.GetCV)
+	protected("PUT /api/v1/cvs/{id}", h.UpdateCV)
 	protected("POST /api/v1/cvs/{id}/embed", h.EmbedCV)
 	protected("POST /api/v1/cvs/{id}/fetch", h.FetchJobsForCV)
 	protected("POST /api/v1/cvs/{id}/retry", h.RetryCVProceassing)

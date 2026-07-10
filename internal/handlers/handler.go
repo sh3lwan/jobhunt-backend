@@ -25,6 +25,7 @@ type Handler struct {
 	authService      *services.AuthService
 	rerankService    *services.RerankService
 	scrapeService    *services.ScrapeService
+	googleService    *services.GoogleOAuthService
 	queries          *repository.Queries
 }
 
@@ -34,6 +35,7 @@ func NewHandler(
 	authService *services.AuthService,
 	rerankService *services.RerankService,
 	scrapeService *services.ScrapeService,
+	googleService *services.GoogleOAuthService,
 ) *Handler {
 	return &Handler{
 		cvService:        services.NewCVService(queries, producer),
@@ -42,8 +44,79 @@ func NewHandler(
 		authService:      authService,
 		rerankService:    rerankService,
 		scrapeService:    scrapeService,
+		googleService:    googleService,
 		queries:          queries,
 	}
+}
+
+const googleStateCookie = "g_oauth_state"
+
+// GoogleAuthStart redirects the browser to Google's consent screen. If Google
+// OAuth isn't configured, it bounces back to the frontend login with an error
+// so the button degrades cleanly instead of hitting a dead route.
+func (h *Handler) GoogleAuthStart(w http.ResponseWriter, r *http.Request) {
+	if !h.googleService.Configured() {
+		http.Redirect(w, r, h.googleService.FrontendURL()+"/login?error=google_not_configured", http.StatusFound)
+		return
+	}
+
+	state, err := h.googleService.NewState()
+	if err != nil {
+		http.Redirect(w, r, h.googleService.FrontendURL()+"/login?error=google_failed", http.StatusFound)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     googleStateCookie,
+		Value:    state,
+		Path:     "/",
+		MaxAge:   600,
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	http.Redirect(w, r, h.googleService.AuthCodeURL(state), http.StatusFound)
+}
+
+// GoogleAuthCallback completes the flow and redirects to the frontend with a
+// token fragment the SPA stores in localStorage.
+func (h *Handler) GoogleAuthCallback(w http.ResponseWriter, r *http.Request) {
+	frontend := h.googleService.FrontendURL()
+
+	fail := func(reason string) {
+		http.Redirect(w, r, frontend+"/login?error="+reason, http.StatusFound)
+	}
+
+	query := r.URL.Query()
+
+	if query.Get("error") != "" {
+		fail("google_denied")
+		return
+	}
+
+	// CSRF: state must match the cookie set at start.
+	cookie, err := r.Cookie(googleStateCookie)
+	if err != nil || cookie.Value == "" || cookie.Value != query.Get("state") {
+		fail("google_state_mismatch")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: googleStateCookie, Value: "", Path: "/", MaxAge: -1})
+
+	code := query.Get("code")
+	if code == "" {
+		fail("google_no_code")
+		return
+	}
+
+	token, err := h.googleService.HandleCallback(r.Context(), code)
+	if err != nil {
+		fail("google_failed")
+		return
+	}
+
+	// Token in the URL fragment: never sent to the server, read client-side.
+	http.Redirect(w, r, frontend+"/auth/callback#token="+token, http.StatusFound)
 }
 
 // PipelineStats powers the dashboard KPIs and the Sources page.
@@ -319,6 +392,71 @@ func (h *Handler) ListCVs(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]any{
 		"cvs": cvs,
 	})
+}
+
+// GetCV returns a single CV analysis, scoped to the requesting user. Lets the
+// detail page load on direct navigation instead of relying on in-memory state.
+func (h *Handler) GetCV(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid CV id"})
+		return
+	}
+
+	user, err := utils.GetUserFromContext(r.Context())
+	if err != nil {
+		utils.RespondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+
+	cv, err := h.cvService.GetCV(r.Context(), id)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusNotFound, map[string]string{"error": "CV not found"})
+		return
+	}
+
+	if cv.UserID.Valid && cv.UserID.Int64 != user.ID {
+		utils.RespondJSON(w, http.StatusForbidden, map[string]string{"error": "Not your CV"})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{"cv": cv})
+}
+
+// UpdateCV persists a user edit of the parsed CV JSON. The request body is the
+// edited structured CV object; it replaces structured_json verbatim.
+func (h *Handler) UpdateCV(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid CV id"})
+		return
+	}
+
+	user, err := utils.GetUserFromContext(r.Context())
+	if err != nil {
+		utils.RespondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Failed to read body"})
+		return
+	}
+
+	// Validate it's a JSON object before storing.
+	var probe map[string]any
+	if err := json.Unmarshal(body, &probe); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Body must be a JSON object"})
+		return
+	}
+
+	if err := h.cvService.UpdateStructuredJSON(r.Context(), id, user.ID, body); err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "CV updated"})
 }
 
 func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {

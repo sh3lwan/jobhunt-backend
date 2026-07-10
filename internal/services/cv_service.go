@@ -245,6 +245,16 @@ func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis
 	return cvData, nil
 }
 
+// UpdateStructuredJSON persists a user edit of the parsed CV, scoped to the
+// owner. Only the JSON changes — status is left as-is.
+func (s *CVService) UpdateStructuredJSON(ctx context.Context, id, userID int64, structuredJSON []byte) error {
+	return s.repo.UpdateCVStructuredJSONManual(ctx, repository.UpdateCVStructuredJSONManualParams{
+		ID:             id,
+		StructuredJson: structuredJSON,
+		UserID:         pgtype.Int8{Int64: userID, Valid: true},
+	})
+}
+
 func (s *CVService) HandleCVError(ctx context.Context, cvID int64, err error) error {
 	obj, err := json.Marshal(&models.Error{
 		Time:    time.Now(),

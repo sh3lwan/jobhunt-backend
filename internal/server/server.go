@@ -34,6 +34,13 @@ type Config struct {
 	// ParserURL is the jobparser HTTP base (LLM rerank endpoint).
 	ParserURL string
 
+	// Google OAuth (optional). When client ID/secret are empty, the Google
+	// sign-in button degrades to a "not configured" message.
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
+	FrontendURL        string
+
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	IdleTimeout  time.Duration
@@ -83,7 +90,16 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 		scrapeService = services.NewScrapeService(nil)
 	}
 
-	h := handlers.NewHandler(queries, producer, authService, rerankService, scrapeService)
+	googleService := services.NewGoogleOAuthService(
+		config.GoogleClientID,
+		config.GoogleClientSecret,
+		config.GoogleRedirectURL,
+		config.FrontendURL,
+		authService,
+		queries,
+	)
+
+	h := handlers.NewHandler(queries, producer, authService, rerankService, scrapeService, googleService)
 
 	authMiddleware := middleware.NewAuthMiddleware(authService)
 

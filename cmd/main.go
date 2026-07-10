@@ -68,6 +68,11 @@ func loadEnvironmentVariables() (*server.Config, error) {
 		ScraperTopic:    utils.GetEnvOrDefault("KAFKA_SCRAPER_TOPIC", "job-scraping-requests"),
 		ScrapePlatforms: splitCSV(utils.GetEnvOrDefault("SCRAPE_PLATFORMS", "greenhouse,remotive")),
 		ParserURL:       utils.GetEnvOrDefault("PARSER_URL", "http://localhost:5001"),
+
+		GoogleClientID:     utils.GetEnvOrDefault("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret: utils.GetEnvOrDefault("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:  utils.GetEnvOrDefault("GOOGLE_REDIRECT_URL", "http://localhost:8080/api/v1/auth/google/callback"),
+		FrontendURL:        utils.GetEnvOrDefault("FRONTEND_URL", "http://localhost:3000"),
 	}
 
 	err = validateConfig(config)
