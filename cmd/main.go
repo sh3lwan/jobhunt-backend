@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/joho/godotenv"
@@ -62,12 +63,26 @@ func loadEnvironmentVariables() (*server.Config, error) {
 		KafkaBroker: utils.GetEnvOrDefault("KAFKA_BROKER", ""),
 		CVTopic:     utils.GetEnvOrDefault("KAFKA_CV_TOPIC", ""),
 		ResultTopic: utils.GetEnvOrDefault("KAFKA_RESULT_TOPIC", ""),
-		JwtSecret:  utils.GetEnvOrDefault("JWT_SECRET", ""),
+		JwtSecret:   utils.GetEnvOrDefault("JWT_SECRET", ""),
+
+		ScraperTopic:    utils.GetEnvOrDefault("KAFKA_SCRAPER_TOPIC", "job-scraping-requests"),
+		ScrapePlatforms: splitCSV(utils.GetEnvOrDefault("SCRAPE_PLATFORMS", "greenhouse,remotive")),
+		ParserURL:       utils.GetEnvOrDefault("PARSER_URL", "http://localhost:5001"),
 	}
 
 	err = validateConfig(config)
 
 	return config, err
+}
+
+func splitCSV(raw string) []string {
+	var items []string
+	for _, item := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
 }
 
 // validateConfig validates the server configuration

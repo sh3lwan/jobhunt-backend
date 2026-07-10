@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -23,15 +23,161 @@ type Handler struct {
 	dbJobService     *services.DBJobService
 	embeddingService *services.EmbeddingService
 	authService      *services.AuthService
+	rerankService    *services.RerankService
+	scrapeService    *services.ScrapeService
+	queries          *repository.Queries
 }
 
-func NewHandler(queries *repository.Queries, producer *mq.Producer, authService *services.AuthService) *Handler {
+func NewHandler(
+	queries *repository.Queries,
+	producer *mq.Producer,
+	authService *services.AuthService,
+	rerankService *services.RerankService,
+	scrapeService *services.ScrapeService,
+) *Handler {
 	return &Handler{
 		cvService:        services.NewCVService(queries, producer),
 		dbJobService:     services.NewDBJobService(queries),
-		embeddingService: services.NewEmbeddingService(producer),
+		embeddingService: services.NewEmbeddingService(producer, queries),
 		authService:      authService,
+		rerankService:    rerankService,
+		scrapeService:    scrapeService,
+		queries:          queries,
 	}
+}
+
+// PipelineStats powers the dashboard KPIs and the Sources page.
+func (h *Handler) PipelineStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.queries.GetPipelineStats(r.Context())
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	sources, err := h.queries.GetJobsBySource(r.Context())
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	type sourceStat struct {
+		Source        string    `json:"source"`
+		Total         int64     `json:"total"`
+		Embedded      int64     `json:"embedded"`
+		LastCollected time.Time `json:"last_collected"`
+	}
+
+	sourceStats := make([]sourceStat, 0, len(sources))
+	for _, s := range sources {
+		sourceStats = append(sourceStats, sourceStat{
+			Source:        s.Source,
+			Total:         s.Total,
+			Embedded:      s.Embedded,
+			LastCollected: s.LastCollected.Time,
+		})
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{
+		"total_jobs":       stats.TotalJobs,
+		"embedded_jobs":    stats.EmbeddedJobs,
+		"total_matches":    stats.TotalMatches,
+		"reranked_matches": stats.RerankedMatches,
+		"total_cvs":        stats.TotalCvs,
+		"analyzed_cvs":     stats.AnalyzedCvs,
+		"jobs_last_24h":    stats.JobsLast24h,
+		"sources":          sourceStats,
+	})
+}
+
+// ScrapeTasks lists recent scraping task records.
+func (h *Handler) ScrapeTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := h.queries.GetRecentScrapeTasks(r.Context(), 25)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	type task struct {
+		TaskID    string    `json:"task_id"`
+		Platform  string    `json:"platform"`
+		Skills    []string  `json:"skills"`
+		Location  string    `json:"location"`
+		Status    string    `json:"status"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+
+	out := make([]task, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, task{
+			TaskID:    t.TaskID,
+			Platform:  t.Platform,
+			Skills:    t.Skills,
+			Location:  t.Location.String,
+			Status:    t.Status,
+			CreatedAt: t.CreatedAt.Time,
+			UpdatedAt: t.UpdatedAt.Time,
+		})
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{"tasks": out})
+}
+
+// TriggerScrape enqueues an on-demand scraping run.
+func (h *Handler) TriggerScrape(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Platform string   `json:"platform"`
+		Skills   []string `json:"skills"`
+		Location string   `json:"location"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
+		return
+	}
+
+	validPlatforms := map[string]bool{"greenhouse": true, "remotive": true, "linkedin": true}
+
+	if !validPlatforms[req.Platform] {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "platform must be one of: greenhouse, remotive, linkedin"})
+		return
+	}
+
+	if len(req.Skills) == 0 {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one skill is required"})
+		return
+	}
+
+	taskID, err := h.scrapeService.Dispatch(req.Platform, req.Skills, req.Location)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusAccepted, map[string]string{
+		"task_id": taskID,
+		"message": "Scrape queued",
+	})
+}
+
+// RunRerank scores a batch of pending matches on demand (the scheduler also
+// does this every 2 minutes; this endpoint exists for the dashboard button).
+func (h *Handler) RunRerank(w http.ResponseWriter, r *http.Request) {
+	done, err := h.rerankService.RerankPending(r.Context(), 6)
+
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{
+		"reranked": done,
+		"message":  fmt.Sprintf("Reranked %d matches", done),
+	})
 }
 
 func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
@@ -176,36 +322,44 @@ func (h *Handler) ListCVs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {
-	// Fetch jobs from db
-	limit := r.URL.Query().Get("limit")
-	if limit == "" {
-		limit = "10" // Default limit
+	query := r.URL.Query()
+
+	limit := parseIntOrDefault(query.Get("limit"), 20)
+	offset := parseIntOrDefault(query.Get("offset"), 0)
+
+	filter := services.MatchedJobsFilter{
+		Search: query.Get("q"),
+		Limit:  int32(limit),
+		Offset: int32(offset),
 	}
 
-	// Convert limit to int
-	limitInt, err := strconv.Atoi(limit)
-	if err != nil {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "Invalid limit parameter",
-		})
-		return
+	if sources := query.Get("source"); sources != "" {
+		for _, s := range strings.Split(sources, ",") {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				filter.Sources = append(filter.Sources, trimmed)
+			}
+		}
 	}
 
-	offset := r.URL.Query().Get("offset")
-	if offset == "" {
-		offset = "0" // Default offset
-	}
-	// If offset is provided, you can use it in the query
-	offsetInt, err := strconv.Atoi(offset)
-	if err != nil {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "Limit must be greater than 0." + err.Error(),
-		})
-		return
+	if minMatch := query.Get("min_match"); minMatch != "" {
+		if v, err := strconv.ParseFloat(minMatch, 64); err == nil {
+			filter.MinPercentage = &v
+		}
 	}
 
-	// Fetch jobs from the database
-	jobs, err := h.dbJobService.ListJobs(r.Context(), int32(limitInt), int32(offsetInt))
+	// Scope matches to the requested CV, defaulting to the user's most
+	// recently analyzed one.
+	if cvParam := query.Get("cv_id"); cvParam != "" {
+		if id, err := strconv.ParseInt(cvParam, 10, 64); err == nil {
+			filter.CvID = id
+		}
+	} else if user, err := utils.GetUserFromContext(r.Context()); err == nil {
+		if id, err := h.dbJobService.LatestAnalyzedCVId(r.Context(), user.ID); err == nil {
+			filter.CvID = id
+		}
+	}
+
+	jobs, total, err := h.dbJobService.ListMatchedJobs(r.Context(), filter)
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -215,9 +369,24 @@ func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondJSON(w, http.StatusOK, map[string]any{
-		"jobs": jobs,
+		"jobs":   jobs,
+		"total":  total,
+		"cv_id":  filter.CvID,
+		"limit":  limit,
+		"offset": offset,
 	})
 
+}
+
+func parseIntOrDefault(raw string, fallback int) int {
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		return fallback
+	}
+	return v
 }
 
 func (h *Handler) FetchRemotiveJobs(w http.ResponseWriter, r *http.Request) {
@@ -325,8 +494,9 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cv.Status == "analyzed" {
-		// Send the job data for embedding
-		err = h.embeddingService.SendEmbeddingRequest(string(cv.ID), cv.ParsedText.String, models.CVEmbeddingType)
+		// Re-run the analysis pipeline; Analyze builds the {text, links}
+		// envelope the parser expects from the stored parsed_text.
+		err = h.cvService.Analyze(cv)
 
 		if err != nil {
 			h.cvService.HandleCVError(r.Context(), cv.ID, err)
@@ -340,9 +510,7 @@ func (h *Handler) RetryCVProceassing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
-	jobs, err := h.dbJobService.ListJobs(r.Context(), 100, 0)
-
-	jobs = jobs[:1] // For testing purposes, limit to 10 jobs
+	count, err := h.embeddingService.RequestMissingJobEmbeddings(r.Context(), 100)
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -351,31 +519,8 @@ func (h *Handler) EmbeddJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//go func() {
-
-	for _, job := range jobs {
-		// Convert job to JSON
-		data, err := json.Marshal(job)
-		if err != nil {
-			utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
-				"error": "Failed to marshal job: " + err.Error(),
-			})
-			return
-		}
-
-		err = h.embeddingService.SendEmbeddingRequest(string(job.ID), string(data), models.JobEmbeddingType)
-
-		if err != nil {
-			log.Println("Failed to send embedding request for job ID", job.ID, ":", err)
-			continue
-		}
-
-		log.Println("Sent job for embedding:", job.ID, job.Title)
-	}
-	//}()
-
 	utils.RespondJSON(w, http.StatusOK, map[string]string{
-		"message": "Jobs embedded initiated successfully",
+		"message": fmt.Sprintf("Embedding requested for %d jobs", count),
 	})
 
 }
@@ -409,7 +554,7 @@ func (h *Handler) EmbedJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.embeddingService.SendEmbeddingRequest(string(job.ID), string(data), models.JobEmbeddingType)
+	err = h.embeddingService.SendEmbeddingRequest(strconv.FormatInt(int64(job.ID), 10), string(data), models.JobEmbeddingType)
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -485,7 +630,10 @@ func (h *Handler) EmbedCV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.embeddingService.SendEmbeddingRequest(string(cvId), cv.ParsedText.String, models.CVEmbeddingType)
+	// Analyze builds the {text, links} envelope the parser expects — sending
+	// raw parsed_text here would arrive with the wrong field names and be
+	// silently dropped by the worker.
+	err = h.cvService.Analyze(cv)
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{

@@ -12,6 +12,38 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+const countMatchedJobs = `-- name: CountMatchedJobs :one
+SELECT COUNT(*)
+FROM jobs AS j
+LEFT JOIN cv_job_matches AS m ON m.job_id = j.id AND m.cv_id = $1
+WHERE ($2::text[] IS NULL OR j.source = ANY($2::text[]))
+  AND ($3::numeric IS NULL
+       OR COALESCE(m.rerank_score, m.percentage) >= $3::numeric)
+  AND ($4::text IS NULL
+       OR j.title ILIKE '%' || $4::text || '%'
+       OR j.company ILIKE '%' || $4::text || '%'
+       OR j.description ILIKE '%' || $4::text || '%')
+`
+
+type CountMatchedJobsParams struct {
+	CvID          int64
+	Sources       []string
+	MinPercentage pgtype.Numeric
+	Search        pgtype.Text
+}
+
+func (q *Queries) CountMatchedJobs(ctx context.Context, arg CountMatchedJobsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMatchedJobs,
+		arg.CvID,
+		arg.Sources,
+		arg.MinPercentage,
+		arg.Search,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createJob = `-- name: CreateJob :exec
 INSERT INTO jobs (source_id, source, title, company, logo, url, description, tags, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -46,7 +78,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) error {
 }
 
 const getAllJobs = `-- name: GetAllJobs :many
-SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at
+SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at, embedding_requested_at
 FROM jobs
 WHERE ($1::text[] IS NULL OR source = ANY($1))
 ORDER BY publish_at DESC
@@ -81,6 +113,7 @@ func (q *Queries) GetAllJobs(ctx context.Context, arg GetAllJobsParams) ([]Job, 
 			&i.Description,
 			&i.PublishAt,
 			&i.CreatedAt,
+			&i.EmbeddingRequestedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -93,7 +126,7 @@ func (q *Queries) GetAllJobs(ctx context.Context, arg GetAllJobsParams) ([]Job, 
 }
 
 const getJobById = `-- name: GetJobById :one
-SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at
+SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at, embedding_requested_at
 FROM jobs
 WHERE id = $1
 `
@@ -114,12 +147,13 @@ func (q *Queries) GetJobById(ctx context.Context, id int32) (Job, error) {
 		&i.Description,
 		&i.PublishAt,
 		&i.CreatedAt,
+		&i.EmbeddingRequestedAt,
 	)
 	return i, err
 }
 
 const getJobMatchesByCvId = `-- name: GetJobMatchesByCvId :many
-SELECT cv_id, job_id, percentage, created_at, updated_at
+SELECT cv_id, job_id, percentage, created_at, updated_at, canonical_pct, skills_pct, responsibilities_pct, domain_multiplier, rerank_score, rerank_details, reranked_at
 FROM cv_job_matches
 WHERE cv_id = $1
 `
@@ -139,6 +173,13 @@ func (q *Queries) GetJobMatchesByCvId(ctx context.Context, cvID int64) ([]CvJobM
 			&i.Percentage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CanonicalPct,
+			&i.SkillsPct,
+			&i.ResponsibilitiesPct,
+			&i.DomainMultiplier,
+			&i.RerankScore,
+			&i.RerankDetails,
+			&i.RerankedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -151,7 +192,7 @@ func (q *Queries) GetJobMatchesByCvId(ctx context.Context, cvID int64) ([]CvJobM
 }
 
 const getJobMatchesByCvIds = `-- name: GetJobMatchesByCvIds :many
-SELECT cv_id, job_id, percentage, created_at, updated_at
+SELECT cv_id, job_id, percentage, created_at, updated_at, canonical_pct, skills_pct, responsibilities_pct, domain_multiplier, rerank_score, rerank_details, reranked_at
 FROM cv_job_matches
 WHERE cv_id = ANY($1::bigint[])
 ORDER BY percentage DESC
@@ -172,6 +213,13 @@ func (q *Queries) GetJobMatchesByCvIds(ctx context.Context, cvids []int64) ([]Cv
 			&i.Percentage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CanonicalPct,
+			&i.SkillsPct,
+			&i.ResponsibilitiesPct,
+			&i.DomainMultiplier,
+			&i.RerankScore,
+			&i.RerankDetails,
+			&i.RerankedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -184,7 +232,7 @@ func (q *Queries) GetJobMatchesByCvIds(ctx context.Context, cvids []int64) ([]Cv
 }
 
 const getJobMatchesByJobId = `-- name: GetJobMatchesByJobId :many
-SELECT cv_id, job_id, percentage, created_at, updated_at
+SELECT cv_id, job_id, percentage, created_at, updated_at, canonical_pct, skills_pct, responsibilities_pct, domain_multiplier, rerank_score, rerank_details, reranked_at
 FROM cv_job_matches
 WHERE job_id = $1
 `
@@ -204,6 +252,372 @@ func (q *Queries) GetJobMatchesByJobId(ctx context.Context, jobID int64) ([]CvJo
 			&i.Percentage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CanonicalPct,
+			&i.SkillsPct,
+			&i.ResponsibilitiesPct,
+			&i.DomainMultiplier,
+			&i.RerankScore,
+			&i.RerankDetails,
+			&i.RerankedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getJobsBySource = `-- name: GetJobsBySource :many
+SELECT
+  j.source,
+  COUNT(*)                                    AS total,
+  COUNT(je.job_id)                            AS embedded,
+  MAX(j.created_at)::timestamptz              AS last_collected
+FROM jobs AS j
+LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
+GROUP BY j.source
+ORDER BY total DESC
+`
+
+type GetJobsBySourceRow struct {
+	Source        string
+	Total         int64
+	Embedded      int64
+	LastCollected pgtype.Timestamptz
+}
+
+func (q *Queries) GetJobsBySource(ctx context.Context) ([]GetJobsBySourceRow, error) {
+	rows, err := q.db.Query(ctx, getJobsBySource)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetJobsBySourceRow
+	for rows.Next() {
+		var i GetJobsBySourceRow
+		if err := rows.Scan(
+			&i.Source,
+			&i.Total,
+			&i.Embedded,
+			&i.LastCollected,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getJobsMissingEmbeddings = `-- name: GetJobsMissingEmbeddings :many
+SELECT j.id, j.source_id, j.source, j.title, j.company, j.logo, j.location, j.url, j.tags, j.description, j.publish_at, j.created_at, j.embedding_requested_at
+FROM jobs AS j
+LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
+WHERE je.job_id IS NULL
+  AND (j.embedding_requested_at IS NULL
+       OR j.embedding_requested_at < now() - interval '30 minutes')
+ORDER BY j.created_at DESC
+LIMIT $1
+`
+
+func (q *Queries) GetJobsMissingEmbeddings(ctx context.Context, limit int32) ([]Job, error) {
+	rows, err := q.db.Query(ctx, getJobsMissingEmbeddings, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceID,
+			&i.Source,
+			&i.Title,
+			&i.Company,
+			&i.Logo,
+			&i.Location,
+			&i.Url,
+			&i.Tags,
+			&i.Description,
+			&i.PublishAt,
+			&i.CreatedAt,
+			&i.EmbeddingRequestedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getLatestAnalyzedCVId = `-- name: GetLatestAnalyzedCVId :one
+SELECT id
+FROM cv_analyses
+WHERE status = 'analyzed' AND user_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestAnalyzedCVId(ctx context.Context, userID pgtype.Int8) (int64, error) {
+	row := q.db.QueryRow(ctx, getLatestAnalyzedCVId, userID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getMatchedJobs = `-- name: GetMatchedJobs :many
+SELECT
+  j.id, j.source_id, j.source, j.title, j.company, j.logo, j.location,
+  j.url, j.tags, j.description, j.publish_at, j.created_at,
+  m.percentage,
+  m.canonical_pct,
+  m.skills_pct,
+  m.responsibilities_pct,
+  m.domain_multiplier,
+  m.rerank_score,
+  m.rerank_details,
+  (je.job_id IS NOT NULL)::bool AS embedded
+FROM jobs AS j
+LEFT JOIN cv_job_matches AS m ON m.job_id = j.id AND m.cv_id = $1
+LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
+WHERE ($2::text[] IS NULL OR j.source = ANY($2::text[]))
+  AND ($3::numeric IS NULL
+       OR COALESCE(m.rerank_score, m.percentage) >= $3::numeric)
+  AND ($4::text IS NULL
+       OR j.title ILIKE '%' || $4::text || '%'
+       OR j.company ILIKE '%' || $4::text || '%'
+       OR j.description ILIKE '%' || $4::text || '%')
+ORDER BY COALESCE(m.rerank_score, m.percentage) DESC NULLS LAST, j.publish_at DESC
+LIMIT $6 OFFSET $5
+`
+
+type GetMatchedJobsParams struct {
+	CvID          int64
+	Sources       []string
+	MinPercentage pgtype.Numeric
+	Search        pgtype.Text
+	ResultOffset  int32
+	MaxResults    int32
+}
+
+type GetMatchedJobsRow struct {
+	ID                  int32
+	SourceID            pgtype.Text
+	Source              string
+	Title               pgtype.Text
+	Company             pgtype.Text
+	Logo                pgtype.Text
+	Location            pgtype.Text
+	Url                 pgtype.Text
+	Tags                []string
+	Description         pgtype.Text
+	PublishAt           pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	Percentage          pgtype.Numeric
+	CanonicalPct        pgtype.Numeric
+	SkillsPct           pgtype.Numeric
+	ResponsibilitiesPct pgtype.Numeric
+	DomainMultiplier    pgtype.Numeric
+	RerankScore         pgtype.Numeric
+	RerankDetails       []byte
+	Embedded            bool
+}
+
+func (q *Queries) GetMatchedJobs(ctx context.Context, arg GetMatchedJobsParams) ([]GetMatchedJobsRow, error) {
+	rows, err := q.db.Query(ctx, getMatchedJobs,
+		arg.CvID,
+		arg.Sources,
+		arg.MinPercentage,
+		arg.Search,
+		arg.ResultOffset,
+		arg.MaxResults,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetMatchedJobsRow
+	for rows.Next() {
+		var i GetMatchedJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceID,
+			&i.Source,
+			&i.Title,
+			&i.Company,
+			&i.Logo,
+			&i.Location,
+			&i.Url,
+			&i.Tags,
+			&i.Description,
+			&i.PublishAt,
+			&i.CreatedAt,
+			&i.Percentage,
+			&i.CanonicalPct,
+			&i.SkillsPct,
+			&i.ResponsibilitiesPct,
+			&i.DomainMultiplier,
+			&i.RerankScore,
+			&i.RerankDetails,
+			&i.Embedded,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getMatchesNeedingRerank = `-- name: GetMatchesNeedingRerank :many
+SELECT
+  m.cv_id,
+  m.job_id,
+  m.percentage,
+  j.title,
+  j.company,
+  j.location,
+  j.tags,
+  j.description,
+  c.canonical_text AS cv_canonical,
+  c.skills_text    AS cv_skills
+FROM cv_job_matches AS m
+JOIN jobs AS j ON j.id = m.job_id
+JOIN cv_embeddings AS c ON c.cv_id = m.cv_id
+WHERE m.rerank_score IS NULL
+  AND m.percentage >= 35
+ORDER BY m.percentage DESC
+LIMIT $1
+`
+
+type GetMatchesNeedingRerankRow struct {
+	CvID        int64
+	JobID       int64
+	Percentage  pgtype.Numeric
+	Title       pgtype.Text
+	Company     pgtype.Text
+	Location    pgtype.Text
+	Tags        []string
+	Description pgtype.Text
+	CvCanonical pgtype.Text
+	CvSkills    pgtype.Text
+}
+
+// Candidates for LLM reranking: strongest un-reranked matches first. The 35%
+// floor skips domain-gated noise — no point spending LLM time scoring jobs
+// the gate already buried.
+func (q *Queries) GetMatchesNeedingRerank(ctx context.Context, limit int32) ([]GetMatchesNeedingRerankRow, error) {
+	rows, err := q.db.Query(ctx, getMatchesNeedingRerank, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetMatchesNeedingRerankRow
+	for rows.Next() {
+		var i GetMatchesNeedingRerankRow
+		if err := rows.Scan(
+			&i.CvID,
+			&i.JobID,
+			&i.Percentage,
+			&i.Title,
+			&i.Company,
+			&i.Location,
+			&i.Tags,
+			&i.Description,
+			&i.CvCanonical,
+			&i.CvSkills,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPipelineStats = `-- name: GetPipelineStats :one
+SELECT
+  (SELECT COUNT(*) FROM jobs)                                        AS total_jobs,
+  (SELECT COUNT(*) FROM jobs_embeddings)                             AS embedded_jobs,
+  (SELECT COUNT(*) FROM cv_job_matches)                              AS total_matches,
+  (SELECT COUNT(*) FROM cv_job_matches WHERE rerank_score IS NOT NULL) AS reranked_matches,
+  (SELECT COUNT(*) FROM cv_analyses)                                 AS total_cvs,
+  (SELECT COUNT(*) FROM cv_analyses WHERE status = 'analyzed')       AS analyzed_cvs,
+  (SELECT COUNT(*) FROM jobs WHERE created_at > now() - interval '24 hours') AS jobs_last_24h
+`
+
+type GetPipelineStatsRow struct {
+	TotalJobs       int64
+	EmbeddedJobs    int64
+	TotalMatches    int64
+	RerankedMatches int64
+	TotalCvs        int64
+	AnalyzedCvs     int64
+	JobsLast24h     int64
+}
+
+func (q *Queries) GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error) {
+	row := q.db.QueryRow(ctx, getPipelineStats)
+	var i GetPipelineStatsRow
+	err := row.Scan(
+		&i.TotalJobs,
+		&i.EmbeddedJobs,
+		&i.TotalMatches,
+		&i.RerankedMatches,
+		&i.TotalCvs,
+		&i.AnalyzedCvs,
+		&i.JobsLast24h,
+	)
+	return i, err
+}
+
+const getRecentScrapeTasks = `-- name: GetRecentScrapeTasks :many
+SELECT task_id, platform, skills, location, status, created_at, updated_at
+FROM job_fetch_tasks
+ORDER BY created_at DESC
+LIMIT $1
+`
+
+type GetRecentScrapeTasksRow struct {
+	TaskID    string
+	Platform  string
+	Skills    []string
+	Location  pgtype.Text
+	Status    string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) GetRecentScrapeTasks(ctx context.Context, limit int32) ([]GetRecentScrapeTasksRow, error) {
+	rows, err := q.db.Query(ctx, getRecentScrapeTasks, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetRecentScrapeTasksRow
+	for rows.Next() {
+		var i GetRecentScrapeTasksRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.Platform,
+			&i.Skills,
+			&i.Location,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -216,18 +630,85 @@ func (q *Queries) GetJobMatchesByJobId(ctx context.Context, jobID int64) ([]CvJo
 }
 
 const insertAllMissingCvJobPairs = `-- name: InsertAllMissingCvJobPairs :execrows
-INSERT INTO cv_job_matches (cv_id, job_id, percentage)
+INSERT INTO cv_job_matches (cv_id, job_id, percentage, canonical_pct, skills_pct, responsibilities_pct, domain_multiplier)
 SELECT
-  c.cv_id,
-  je.job_id,
-  ROUND(((1 - (c.embedding <=> je.embedding)) * 100)::numeric, 2) AS percentage
-FROM cv_embeddings AS c
-JOIN jobs_embeddings AS je ON TRUE
-LEFT JOIN cv_job_matches AS m
-    ON m.cv_id = c.cv_id AND m.job_id = je.job_id
-WHERE m.cv_id IS NULL
+  cal.cv_id,
+  cal.job_id,
+  ROUND(((0.5 * cal.canonical_cal + 0.3 * cal.skills_cal + 0.2 * cal.resp_cal) * cal.domain_mult * 100)::numeric, 2),
+  ROUND((cal.canonical_cal * 100)::numeric, 2),
+  ROUND((cal.skills_cal * 100)::numeric, 2),
+  ROUND((cal.resp_cal * 100)::numeric, 2),
+  cal.domain_mult
+FROM (
+  SELECT
+    s.cv_id,
+    s.job_id,
+    s.domain_mult,
+    GREATEST(0, LEAST(1, (s.canonical_sim - 0.50) / 0.35)) AS canonical_cal,
+    GREATEST(0, LEAST(1, (s.skills_sim - 0.50) / 0.35)) AS skills_cal,
+    GREATEST(0, LEAST(1, (s.resp_sim - 0.50) / 0.35)) AS resp_cal
+  FROM (
+  SELECT
+    c.cv_id,
+    je.job_id,
+    COALESCE(
+      CASE WHEN vector_norm(c.canonical_text_embeddings) = 0
+             OR vector_norm(je.canonical_text_embeddings) = 0
+           THEN 0
+           ELSE 1 - (c.canonical_text_embeddings <=> je.canonical_text_embeddings)
+      END, 0) AS canonical_sim,
+    COALESCE(
+      CASE WHEN vector_norm(c.skills_text_embeddings) = 0
+             OR vector_norm(je.skills_text_embeddings) = 0
+           THEN 0
+           ELSE 1 - (c.skills_text_embeddings <=> je.skills_text_embeddings)
+      END, 0) AS skills_sim,
+    COALESCE(
+      CASE WHEN vector_norm(c.responsibilities_text_embeddings) = 0
+             OR vector_norm(je.responsibilities_text_embeddings) = 0
+           THEN 0
+           ELSE 1 - (c.responsibilities_text_embeddings <=> je.responsibilities_text_embeddings)
+      END, 0) AS resp_sim,
+    CASE
+      WHEN cvd.domain = '' OR jd.domain = '' THEN 0.85
+      WHEN cvd.domain = jd.domain THEN 1.0
+      ELSE 0.40
+    END::numeric(3,2) AS domain_mult
+  FROM cv_embeddings AS c
+  JOIN jobs_embeddings AS je ON TRUE
+  CROSS JOIN LATERAL (
+    SELECT CASE
+      WHEN upper(c.canonical_text) LIKE 'DOMAIN_IDENTITY:%'
+      THEN upper(trim(split_part(split_part(c.canonical_text, E'\n', 1), ':', 2)))
+      ELSE ''
+    END AS domain
+  ) AS cvd
+  CROSS JOIN LATERAL (
+    SELECT CASE
+      WHEN upper(je.canonical_text) LIKE 'DOMAIN_IDENTITY:%'
+      THEN upper(trim(split_part(split_part(je.canonical_text, E'\n', 1), ':', 2)))
+      ELSE ''
+    END AS domain
+  ) AS jd
+  LEFT JOIN cv_job_matches AS m
+      ON m.cv_id = c.cv_id AND m.job_id = je.job_id
+  WHERE m.cv_id IS NULL
+  ) AS s
+) AS cal
 `
 
+// Weighted cosine similarity across the three embedding components, with the
+// per-component scores stored so the UI can explain the total.
+// Zero vectors (inserted when the parser produced no embedding) would make
+// <=> return NaN, so each component falls back to 0 in that case.
+// A domain gate multiplies the final score: canonical_text on both sides
+// begins with "DOMAIN_IDENTITY: <DOMAIN>", and a cross-domain pair (e.g. a
+// nursing job against a software CV) is penalized to 40%; unknown domains get
+// a mild 85% so parse hiccups don't zero out real candidates.
+// Raw cosine similarities cluster in a narrow ~0.50-0.85 band, which makes
+// every job look like a 60-80% match. Each component is calibrated through a
+// linear stretch — (sim - 0.50) / 0.35, clamped to [0,1] — so scores use the
+// full range: excellent fits read 85%+, weak fits drop below 40%.
 func (q *Queries) InsertAllMissingCvJobPairs(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, insertAllMissingCvJobPairs)
 	if err != nil {
@@ -269,6 +750,43 @@ func (q *Queries) InsertJobEmbedding(ctx context.Context, arg InsertJobEmbedding
 		arg.CanonicalTextEmbeddings,
 		arg.SkillsTextEmbeddings,
 		arg.ResponsibilitiesTextEmbeddings,
+	)
+	return err
+}
+
+const markJobsEmbeddingRequested = `-- name: MarkJobsEmbeddingRequested :exec
+UPDATE jobs
+SET embedding_requested_at = now()
+WHERE id = ANY($1::int[])
+`
+
+func (q *Queries) MarkJobsEmbeddingRequested(ctx context.Context, jobIds []int32) error {
+	_, err := q.db.Exec(ctx, markJobsEmbeddingRequested, jobIds)
+	return err
+}
+
+const updateMatchRerank = `-- name: UpdateMatchRerank :exec
+UPDATE cv_job_matches
+SET rerank_score   = $3,
+    rerank_details = $4,
+    reranked_at    = now(),
+    updated_at     = now()
+WHERE cv_id = $1 AND job_id = $2
+`
+
+type UpdateMatchRerankParams struct {
+	CvID          int64
+	JobID         int64
+	RerankScore   pgtype.Numeric
+	RerankDetails []byte
+}
+
+func (q *Queries) UpdateMatchRerank(ctx context.Context, arg UpdateMatchRerankParams) error {
+	_, err := q.db.Exec(ctx, updateMatchRerank,
+		arg.CvID,
+		arg.JobID,
+		arg.RerankScore,
+		arg.RerankDetails,
 	)
 	return err
 }

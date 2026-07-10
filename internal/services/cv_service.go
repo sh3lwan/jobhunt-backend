@@ -69,7 +69,15 @@ func (s *CVService) HandleCVUpload(ctx context.Context, originalName string, dat
 		return 0, err
 	}
 
-	analysis.ParsedText = pgtype.Text{String: cvData.RawText, Valid: false}
+	// Analyze unmarshals ParsedText as a CVData JSON document — mirror what
+	// Parse just persisted, not the raw extracted text.
+	parsedJSON, err := json.Marshal(cvData)
+
+	if err != nil {
+		return 0, fmt.Errorf("❌ Failed to marshal parsed CV data: %w", err)
+	}
+
+	analysis.ParsedText = pgtype.Text{String: string(parsedJSON), Valid: true}
 
 	err = s.Analyze(&analysis)
 

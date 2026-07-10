@@ -35,26 +35,45 @@ type CvEmbedding struct {
 }
 
 type CvJobMatch struct {
-	CvID       int64
-	JobID      int64
-	Percentage pgtype.Numeric
-	CreatedAt  pgtype.Timestamp
-	UpdatedAt  pgtype.Timestamp
+	CvID                int64
+	JobID               int64
+	Percentage          pgtype.Numeric
+	CreatedAt           pgtype.Timestamp
+	UpdatedAt           pgtype.Timestamp
+	CanonicalPct        pgtype.Numeric
+	SkillsPct           pgtype.Numeric
+	ResponsibilitiesPct pgtype.Numeric
+	DomainMultiplier    pgtype.Numeric
+	RerankScore         pgtype.Numeric
+	RerankDetails       []byte
+	RerankedAt          pgtype.Timestamptz
 }
 
 type Job struct {
-	ID          int32
-	SourceID    pgtype.Text
-	Source      string
-	Title       pgtype.Text
-	Company     pgtype.Text
-	Logo        pgtype.Text
-	Location    pgtype.Text
-	Url         pgtype.Text
-	Tags        []string
-	Description pgtype.Text
-	PublishAt   pgtype.Timestamptz
-	CreatedAt   pgtype.Timestamptz
+	ID                   int32
+	SourceID             pgtype.Text
+	Source               string
+	Title                pgtype.Text
+	Company              pgtype.Text
+	Logo                 pgtype.Text
+	Location             pgtype.Text
+	Url                  pgtype.Text
+	Tags                 []string
+	Description          pgtype.Text
+	PublishAt            pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	EmbeddingRequestedAt pgtype.Timestamptz
+}
+
+type JobFetchTask struct {
+	ID        int32
+	TaskID    string
+	Platform  string
+	Skills    []string
+	Location  pgtype.Text
+	Status    string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }
 
 type JobsEmbedding struct {

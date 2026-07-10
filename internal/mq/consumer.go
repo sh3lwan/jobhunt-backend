@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"github.com/segmentio/kafka-go"
+
 	"github.com/sh3lwan/jobhunter/internal/models"
 	"github.com/sh3lwan/jobhunter/internal/repository"
 )
@@ -21,6 +24,12 @@ type Consumer struct {
 	Reader  *kafka.Reader
 	Pool    *pgxpool.Pool
 	Queries *repository.Queries
+
+	// ScrapeProducer publishes scraping requests (jobscrapper's
+	// job-scraping-requests topic) when a CV finishes analysis, so job
+	// crawling follows the skills found in the CV. Optional — nil disables.
+	ScrapeProducer  *Producer
+	ScrapePlatforms []string
 }
 
 func NewConsumer(
@@ -126,6 +135,8 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 
 	qtx := c.Queries.WithTx(tx)
 
+	var analyzedCV map[string]any
+
 	switch body.Type {
 	case models.JobEmbeddingType:
 		log.Printf("Processing Job embedding for Job ID %d\n", key)
@@ -158,13 +169,15 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 		fmt.Printf("Inserted job embedding for job ID %d\n", key)
 
 	default:
-		// remove embeddings from json before storing
 		log.Printf("Processing CV embedding for CV ID %d\n", key)
+
+		structured, cvFields := stripEmbeddingFields(rawValue)
+
 		if err := qtx.UpdateCVStructuredJSON(
 			ctx,
 			repository.UpdateCVStructuredJSONParams{
 				ID:             key,
-				StructuredJson: rawValue,
+				StructuredJson: structured,
 			}); err != nil {
 			return fmt.Errorf("Error updating CV structured JSON: %s\n", err)
 		}
@@ -195,11 +208,27 @@ func (c *Consumer) processMessage(ctx context.Context, key int64, body models.Em
 				return fmt.Errorf("Error inserting CV embedding into database: %s\n", err)
 			}
 		}
+
+		// The CV is fully analyzed — crawl jobs matching its profile once the
+		// transaction commits.
+		analyzedCV = cvFields
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		log.Printf("Error committing transaction: %s\n", err)
 		return fmt.Errorf("Error committing transaction: %s\n", err)
+	}
+
+	if analyzedCV != nil {
+		c.dispatchScrapeForCV(key, analyzedCV)
+	}
+
+	// Materialize match scores for any new cv/job embedding pairs. Idempotent:
+	// only missing pairs are inserted, so running after every message is safe.
+	if count, err := c.Queries.InsertAllMissingCvJobPairs(ctx); err != nil {
+		log.Printf("Error computing cv-job matches: %s\n", err)
+	} else if count > 0 {
+		log.Printf("Computed %d new cv-job match pairs", count)
 	}
 
 	log.Printf("Successfully processed message with key %d", key)
@@ -213,4 +242,101 @@ func createOrEmptyVector(vector []float32) pgvector.Vector {
 		return pgvector.NewVector(zeros)
 	}
 	return pgvector.NewVector(vector)
+}
+
+// stripEmbeddingFields removes the bulky embedding vectors from the analysis
+// result before it is stored as the CV's structured_json, and returns the
+// decoded fields for downstream use. Falls back to the raw payload if it
+// cannot be decoded.
+func stripEmbeddingFields(rawValue []byte) ([]byte, map[string]any) {
+	var fields map[string]any
+
+	if err := json.Unmarshal(rawValue, &fields); err != nil {
+		return rawValue, nil
+	}
+
+	delete(fields, "canonical_text_embeddings")
+	delete(fields, "skills_text_embeddings")
+	delete(fields, "responsibilities_text_embeddings")
+
+	cleaned, err := json.Marshal(fields)
+	if err != nil {
+		return rawValue, fields
+	}
+
+	return cleaned, fields
+}
+
+// dispatchScrapeForCV enqueues scraping requests based on what the CV
+// contains: search keywords chosen by the parser when available, otherwise
+// the top technologies/skills.
+func (c *Consumer) dispatchScrapeForCV(cvID int64, cvFields map[string]any) {
+	if c.ScrapeProducer == nil || len(c.ScrapePlatforms) == 0 || cvFields == nil {
+		return
+	}
+
+	keywords := extractSearchKeywords(cvFields)
+
+	if len(keywords) == 0 {
+		log.Printf("CV %d analyzed but no search keywords found — skipping crawl dispatch", cvID)
+		return
+	}
+
+	location, _ := cvFields["location_preference"].(string)
+
+	for _, platform := range c.ScrapePlatforms {
+		request := map[string]any{
+			"taskId":   uuid.New().String(),
+			"platform": platform,
+			"skills":   keywords,
+		}
+
+		if location != "" {
+			request["location"] = location
+		}
+
+		payload, err := json.Marshal(request)
+		if err != nil {
+			log.Printf("Error marshalling scrape request for CV %d: %s", cvID, err)
+			continue
+		}
+
+		if err := c.ScrapeProducer.Send([]byte(request["taskId"].(string)), payload); err != nil {
+			log.Printf("Error dispatching %s scrape for CV %d: %s", platform, cvID, err)
+			continue
+		}
+
+		log.Printf("Dispatched %s scrape for CV %d with keywords %v", platform, cvID, keywords)
+	}
+}
+
+// extractSearchKeywords picks the terms to crawl with, preferring the
+// parser-provided search_keywords, then technologies, then skills.
+func extractSearchKeywords(fields map[string]any) []string {
+	const maxKeywords = 6
+
+	for _, source := range []string{"search_keywords", "technologies", "skills"} {
+		raw, ok := fields[source].([]any)
+		if !ok {
+			continue
+		}
+
+		var keywords []string
+		for _, item := range raw {
+			s, ok := item.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				continue
+			}
+			keywords = append(keywords, strings.TrimSpace(s))
+			if len(keywords) == maxKeywords {
+				break
+			}
+		}
+
+		if len(keywords) > 0 {
+			return keywords
+		}
+	}
+
+	return nil
 }

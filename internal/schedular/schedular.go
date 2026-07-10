@@ -2,56 +2,78 @@ package schedular
 
 import (
 	"context"
-	"fmt"
+	"log"
 
 	"github.com/robfig/cron/v3"
 	"github.com/sh3lwan/jobhunter/internal/repository"
 	"github.com/sh3lwan/jobhunter/internal/services"
 )
 
-func StartSchedular(q *repository.Queries, ctx context.Context) {
-	fmt.Println("Cron Job Started...")
+// StartSchedular runs the background reconciliation loops:
+//   - every 2 minutes: request embeddings for jobs that have none yet
+//     (covers jobs inserted by jobscrapper or any other writer to the shared DB)
+//   - every 2 minutes: LLM-rerank the strongest matches that lack a rerank
+//   - every 10 minutes: materialize match scores for any cv/job pairs that
+//     were missed by the per-message trigger in the Kafka consumer
+func StartSchedular(q *repository.Queries, embeddingSvc *services.EmbeddingService, rerankSvc *services.RerankService, ctx context.Context) {
+	log.Println("Scheduler started")
+
 	c := cron.New()
 
-	// c.AddFunc("*/1 * * * *", func() {
-		// remotive(q, ctx)
-	// })
+	// Serialize rerank runs — each does multiple sequential LLM calls and a
+	// slow tick must not overlap the next one.
+	rerankBusy := make(chan struct{}, 1)
 
-	//	c.AddFunc("*/5 * * * *", func() {
-	//
-	//		//mbeddingService := services.NewEmbeddingService(nil)
-	//
-	//		//count, err := q.InsertAllMissingCvJobPairs(ctx)
-	//
-	//		//	if err != nil {
-	//		//		log.Printf("Error @ Schedular - InsertAllMissingCvJobPairs: %v", err.Error())
-	//		//	}
-	//
-	//		//	log.Printf("Missing CV-Job Pairs Affected: %d", count)
-	//	})
+	c.AddFunc("*/2 * * * *", func() {
+		select {
+		case rerankBusy <- struct{}{}:
+			defer func() { <-rerankBusy }()
+		default:
+			return
+		}
+
+		done, err := rerankSvc.RerankPending(ctx, 6)
+
+		if err != nil {
+			log.Printf("Scheduler - RerankPending: %v", err)
+			return
+		}
+
+		if done > 0 {
+			log.Printf("Scheduler - reranked %d matches", done)
+		}
+	})
+
+	c.AddFunc("*/2 * * * *", func() {
+		sent, err := embeddingSvc.RequestMissingJobEmbeddings(ctx, 50)
+
+		if err != nil {
+			log.Printf("Scheduler - RequestMissingJobEmbeddings: %v", err)
+			return
+		}
+
+		if sent > 0 {
+			log.Printf("Scheduler - requested embeddings for %d jobs", sent)
+		}
+	})
+
+	c.AddFunc("*/10 * * * *", func() {
+		count, err := q.InsertAllMissingCvJobPairs(ctx)
+
+		if err != nil {
+			log.Printf("Scheduler - InsertAllMissingCvJobPairs: %v", err)
+			return
+		}
+
+		if count > 0 {
+			log.Printf("Scheduler - computed %d new cv-job match pairs", count)
+		}
+	})
 
 	c.Start()
-}
 
-func remotive(q *repository.Queries, ctx context.Context) {
-	// scrappe remotive jobs + save to db
-	rmtv := services.NewRemotiveService()
-
-	cvService := services.NewCVService(q, nil)
-
-	skills, err := cvService.GetSkills(ctx)
-
-	jobs, err := rmtv.CollectJobs(q, ctx, skills)
-
-	if err != nil {
-		fmt.Printf("Error @ Schedular - Remoative Collect: %v", err.Error())
-	}
-
-	dbjobService := services.NewDBJobService(q)
-
-	err = dbjobService.SaveJobs(ctx, jobs)
-
-	if err != nil {
-		fmt.Println("Error @ Schedular: ", err.Error())
-	}
+	go func() {
+		<-ctx.Done()
+		c.Stop()
+	}()
 }

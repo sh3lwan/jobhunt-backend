@@ -2,8 +2,12 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/sh3lwan/jobhunter/internal/models"
 	"github.com/sh3lwan/jobhunter/internal/repository"
@@ -97,6 +101,124 @@ func (s *DBJobService) ListJobs(ctx context.Context, limit, offset int32) ([]mod
 	})
 
 	return jobList, nil
+}
+
+// LatestAnalyzedCVId returns the user's most recently analyzed CV id.
+func (s *DBJobService) LatestAnalyzedCVId(ctx context.Context, userID int64) (int64, error) {
+	return s.queries.GetLatestAnalyzedCVId(ctx, pgtype.Int8{Int64: userID, Valid: true})
+}
+
+// MatchedJobsFilter narrows the matched-jobs listing.
+type MatchedJobsFilter struct {
+	CvID          int64
+	Sources       []string
+	MinPercentage *float64
+	Search        string
+	Limit         int32
+	Offset        int32
+}
+
+// ListMatchedJobs returns jobs with their match breakdown against the given
+// CV, ordered by match percentage (jobs not yet matched come last), plus the
+// total count for pagination.
+func (s *DBJobService) ListMatchedJobs(ctx context.Context, filter MatchedJobsFilter) ([]models.MatchedJob, int64, error) {
+	var minPct pgtype.Numeric
+
+	if filter.MinPercentage != nil {
+		if err := minPct.Scan(strconv.FormatFloat(*filter.MinPercentage, 'f', 2, 64)); err != nil {
+			return nil, 0, fmt.Errorf("invalid min percentage: %w", err)
+		}
+	}
+
+	var search pgtype.Text
+	if filter.Search != "" {
+		search = pgtype.Text{String: filter.Search, Valid: true}
+	}
+
+	rows, err := s.queries.GetMatchedJobs(ctx, repository.GetMatchedJobsParams{
+		CvID:          filter.CvID,
+		Sources:       filter.Sources,
+		MinPercentage: minPct,
+		Search:        search,
+		MaxResults:    filter.Limit,
+		ResultOffset:  filter.Offset,
+	})
+
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list matched jobs: %w", err)
+	}
+
+	total, err := s.queries.CountMatchedJobs(ctx, repository.CountMatchedJobsParams{
+		CvID:          filter.CvID,
+		Sources:       filter.Sources,
+		MinPercentage: minPct,
+		Search:        search,
+	})
+
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count matched jobs: %w", err)
+	}
+
+	jobs := make([]models.MatchedJob, 0, len(rows))
+
+	for _, row := range rows {
+		job := models.MatchedJob{
+			Job: models.Job{
+				ID:              row.ID,
+				SourceID:        row.SourceID.String,
+				Source:          row.Source,
+				Title:           row.Title.String,
+				Company:         row.Company.String,
+				Logo:            row.Logo.String,
+				Location:        row.Location.String,
+				Url:             row.Url.String,
+				Tags:            row.Tags,
+				Description:     row.Description.String,
+				PublishAt:       row.PublishAt.Time,
+				CreatedAt:       row.CreatedAt.Time,
+				MatchPercentage: numericToFloat32(row.Percentage),
+			},
+			CanonicalPct:        numericToFloatPtr(row.CanonicalPct),
+			SkillsPct:           numericToFloatPtr(row.SkillsPct),
+			ResponsibilitiesPct: numericToFloatPtr(row.ResponsibilitiesPct),
+			DomainMultiplier:    numericToFloatPtr(row.DomainMultiplier),
+			RerankScore:         numericToFloatPtr(row.RerankScore),
+			Embedded:            row.Embedded,
+		}
+
+		if len(row.RerankDetails) > 0 {
+			var details map[string]any
+			if err := json.Unmarshal(row.RerankDetails, &details); err == nil {
+				job.RerankDetails = details
+			}
+		}
+
+		jobs = append(jobs, job)
+	}
+
+	return jobs, total, nil
+}
+
+func numericToFloat32(n pgtype.Numeric) float32 {
+	if !n.Valid {
+		return 0
+	}
+	v, err := n.Float64Value()
+	if err != nil {
+		return 0
+	}
+	return float32(v.Float64)
+}
+
+func numericToFloatPtr(n pgtype.Numeric) *float64 {
+	if !n.Valid {
+		return nil
+	}
+	v, err := n.Float64Value()
+	if err != nil {
+		return nil
+	}
+	return &v.Float64
 }
 
 func (s *DBJobService) SaveJobs(ctx context.Context, jobs []repository.Job) error {

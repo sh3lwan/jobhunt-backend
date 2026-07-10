@@ -32,5 +32,11 @@ func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *
 	protected("GET /api/v1/jobs", h.FetchJobs)
 	protected("POST /api/v1/jobs/{id}/embed", h.EmbedJob)
 
+	// Pipeline control
+	protected("GET /api/v1/stats", h.PipelineStats)
+	protected("GET /api/v1/scrape/tasks", h.ScrapeTasks)
+	protected("POST /api/v1/scrape", h.TriggerScrape)
+	protected("POST /api/v1/rerank/run", h.RunRerank)
+
 	return mux
 }

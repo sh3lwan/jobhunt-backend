@@ -24,7 +24,15 @@ type Config struct {
 	KafkaBroker string
 	CVTopic     string
 	ResultTopic string
-	JwtSecret    string
+	JwtSecret   string
+
+	// ScraperTopic is jobscrapper's request topic; CV analysis completion
+	// dispatches skill-based scraping requests to it for ScrapePlatforms.
+	ScraperTopic    string
+	ScrapePlatforms []string
+
+	// ParserURL is the jobparser HTTP base (LLM rerank endpoint).
+	ParserURL string
 
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
@@ -56,12 +64,26 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 
 	// Create consumer
 	consumer := mq.NewConsumer(queries, db, config.ResultTopic, config.KafkaBroker)
-	
+
+	if config.ScraperTopic != "" && len(config.ScrapePlatforms) > 0 {
+		consumer.ScrapeProducer = mq.NewProducer(config.KafkaBroker, config.ScraperTopic)
+		consumer.ScrapePlatforms = config.ScrapePlatforms
+	}
+
+
 	// Create services
-	fmt.Println("JWT Secret:", config.JwtSecret)
 	authService := services.NewAuthService(config.JwtSecret, queries)
 
-	h := handlers.NewHandler(queries, producer, authService)
+	rerankService := services.NewRerankService(queries, config.ParserURL)
+
+	var scrapeService *services.ScrapeService
+	if config.ScraperTopic != "" {
+		scrapeService = services.NewScrapeService(mq.NewProducer(config.KafkaBroker, config.ScraperTopic))
+	} else {
+		scrapeService = services.NewScrapeService(nil)
+	}
+
+	h := handlers.NewHandler(queries, producer, authService, rerankService, scrapeService)
 
 	authMiddleware := middleware.NewAuthMiddleware(authService)
 
@@ -135,7 +157,11 @@ func (s *Server) Start(ctx context.Context) error {
 
 	queries := repository.New(s.db)
 
-	schedular.StartSchedular(queries, ctx)
+	embeddingSvc := services.NewEmbeddingService(s.producer, queries)
+
+	rerankSvc := services.NewRerankService(queries, s.config.ParserURL)
+
+	schedular.StartSchedular(queries, embeddingSvc, rerankSvc, ctx)
 
 	// Wait for shutdown signal or server error
 	select {

@@ -2,10 +2,14 @@ package services
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/sh3lwan/jobhunter/internal/models"
 	"github.com/sh3lwan/jobhunter/internal/repository"
 )
@@ -50,10 +54,28 @@ func (s *AuthService) ValidateUser(ctx context.Context, username, password strin
 	user, err := svc.GetUserByUsername(ctx, username)
 
 	if err != nil {
-		return nil, fmt.Errorf("user not found: %v", err)
+		return nil, fmt.Errorf("user not found: %w", err)
 	}
 
-	if user != nil && user.Password == password {
+	if user == nil {
+		return nil, fmt.Errorf("invalid credentials")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err == nil {
+		return user, nil
+	}
+
+	// Legacy rows store the password in plaintext; accept once and upgrade
+	// the stored value to a bcrypt hash.
+	if subtle.ConstantTimeCompare([]byte(user.Password), []byte(password)) == 1 {
+		if hash, herr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost); herr == nil {
+			if uerr := s.queries.UpdateUserPassword(ctx, repository.UpdateUserPasswordParams{
+				ID:       user.ID,
+				Password: string(hash),
+			}); uerr != nil {
+				log.Printf("failed to upgrade password hash for user %d: %v", user.ID, uerr)
+			}
+		}
 		return user, nil
 	}
 

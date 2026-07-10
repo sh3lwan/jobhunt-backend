@@ -6,6 +6,18 @@ const (
 	JobEmbeddingType = "job_analysis"
 )
 
+// MatchedJob is a job together with its match score breakdown against a CV.
+type MatchedJob struct {
+	Job
+	CanonicalPct        *float64 `json:"canonical_pct,omitempty"`        // Overall profile similarity component
+	SkillsPct           *float64 `json:"skills_pct,omitempty"`           // Skills similarity component
+	ResponsibilitiesPct *float64 `json:"responsibilities_pct,omitempty"` // Responsibilities similarity component
+	DomainMultiplier    *float64 `json:"domain_multiplier,omitempty"`    // 1.0 same domain, 0.4 cross-domain penalty
+	RerankScore         *float64 `json:"rerank_score,omitempty"`         // LLM recruiter-rubric score (authoritative when present)
+	RerankDetails       any      `json:"rerank_details,omitempty"`       // {explanation, strengths, gaps, seniority_fit}
+	Embedded            bool     `json:"embedded"`                       // Whether the job has been parsed + embedded yet
+}
+
 // Job represents a job posting in the system.
 type Job struct {
 	ID              int32     `json:"id"`               // Unique identifier for the Job
