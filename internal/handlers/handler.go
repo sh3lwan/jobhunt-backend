@@ -119,6 +119,64 @@ func (h *Handler) GoogleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, frontend+"/auth/callback#token="+token, http.StatusFound)
 }
 
+var validSizeBands = map[string]bool{"small": true, "midsize": true, "large": true, "enterprise": true}
+
+// GetPreferences returns the user's target company-size preference.
+func (h *Handler) GetPreferences(w http.ResponseWriter, r *http.Request) {
+	user, err := utils.GetUserFromContext(r.Context())
+	if err != nil {
+		utils.RespondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+
+	sizes, err := h.queries.GetUserPreferredSizes(r.Context(), user.ID)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if sizes == nil {
+		sizes = []string{}
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{"preferred_company_sizes": sizes})
+}
+
+// UpdatePreferences sets the user's target company-size bands. This drives the
+// automatic CV-driven crawl — an empty list means all sizes.
+func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
+	user, err := utils.GetUserFromContext(r.Context())
+	if err != nil {
+		utils.RespondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+
+	var body struct {
+		PreferredCompanySizes []string `json:"preferred_company_sizes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
+		return
+	}
+
+	cleaned := make([]string, 0, len(body.PreferredCompanySizes))
+	for _, s := range body.PreferredCompanySizes {
+		if validSizeBands[s] {
+			cleaned = append(cleaned, s)
+		}
+	}
+
+	if err := h.queries.UpdateUserPreferredSizes(r.Context(), repository.UpdateUserPreferredSizesParams{
+		ID:                    user.ID,
+		PreferredCompanySizes: cleaned,
+	}); err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]any{"preferred_company_sizes": cleaned})
+}
+
 // PipelineStats powers the dashboard KPIs and the Sources page.
 func (h *Handler) PipelineStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.queries.GetPipelineStats(r.Context())
@@ -202,9 +260,10 @@ func (h *Handler) ScrapeTasks(w http.ResponseWriter, r *http.Request) {
 // TriggerScrape enqueues an on-demand scraping run.
 func (h *Handler) TriggerScrape(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Platform string   `json:"platform"`
-		Skills   []string `json:"skills"`
-		Location string   `json:"location"`
+		Platform  string   `json:"platform"`
+		Skills    []string `json:"skills"`
+		Location  string   `json:"location"`
+		SizeBands []string `json:"size_bands"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -224,7 +283,14 @@ func (h *Handler) TriggerScrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskID, err := h.scrapeService.Dispatch(req.Platform, req.Skills, req.Location)
+	sizeBands := make([]string, 0, len(req.SizeBands))
+	for _, s := range req.SizeBands {
+		if validSizeBands[s] {
+			sizeBands = append(sizeBands, s)
+		}
+	}
+
+	taskID, err := h.scrapeService.Dispatch(req.Platform, req.Skills, req.Location, sizeBands)
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

@@ -284,6 +284,14 @@ func (c *Consumer) dispatchScrapeForCV(cvID int64, cvFields map[string]any) {
 
 	location, _ := cvFields["location_preference"].(string)
 
+	// Company-size preference for this CV's owner narrows the crawl to the
+	// sizes the user selected. Best-effort — an error just means "all sizes".
+	sizeBands, err := c.Queries.GetPreferredSizesByCvId(context.Background(), cvID)
+	if err != nil {
+		log.Printf("CV %d: could not load size preference (%v) — crawling all sizes", cvID, err)
+		sizeBands = nil
+	}
+
 	for _, platform := range c.ScrapePlatforms {
 		request := map[string]any{
 			"taskId":   uuid.New().String(),
@@ -293,6 +301,10 @@ func (c *Consumer) dispatchScrapeForCV(cvID int64, cvFields map[string]any) {
 
 		if location != "" {
 			request["location"] = location
+		}
+
+		if len(sizeBands) > 0 {
+			request["sizeBands"] = sizeBands
 		}
 
 		payload, err := json.Marshal(request)

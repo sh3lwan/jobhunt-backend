@@ -26,7 +26,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
 }
 
 const getAllUsers = `-- name: GetAllUsers :many
-SELECT id, username, email, password, created_at, updated_at
+SELECT id, username, email, password, created_at, updated_at, preferred_company_sizes
 FROM users
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -53,6 +53,7 @@ func (q *Queries) GetAllUsers(ctx context.Context, arg GetAllUsersParams) ([]Use
 			&i.Password,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PreferredCompanySizes,
 		); err != nil {
 			return nil, err
 		}
@@ -64,8 +65,24 @@ func (q *Queries) GetAllUsers(ctx context.Context, arg GetAllUsersParams) ([]Use
 	return items, nil
 }
 
+const getPreferredSizesByCvId = `-- name: GetPreferredSizesByCvId :one
+SELECT u.preferred_company_sizes
+FROM cv_analyses c
+JOIN users u ON u.id = c.user_id
+WHERE c.id = $1
+`
+
+// Company-size preference for the owner of a CV — used by the CV-driven
+// crawl dispatch to scope scrapes without a separate lookup round-trip.
+func (q *Queries) GetPreferredSizesByCvId(ctx context.Context, id int64) ([]string, error) {
+	row := q.db.QueryRow(ctx, getPreferredSizesByCvId, id)
+	var preferred_company_sizes []string
+	err := row.Scan(&preferred_company_sizes)
+	return preferred_company_sizes, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, username, email, password, created_at, updated_at
+SELECT id, username, email, password, created_at, updated_at, preferred_company_sizes
 FROM users
 WHERE email = $1
 `
@@ -80,12 +97,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Password,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PreferredCompanySizes,
 	)
 	return i, err
 }
 
 const getUserById = `-- name: GetUserById :one
-SELECT id, username, email, password, created_at, updated_at
+SELECT id, username, email, password, created_at, updated_at, preferred_company_sizes
 FROM users
 WHERE id = $1
 `
@@ -100,12 +118,13 @@ func (q *Queries) GetUserById(ctx context.Context, id int64) (User, error) {
 		&i.Password,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PreferredCompanySizes,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password, created_at, updated_at
+SELECT id, username, email, password, created_at, updated_at, preferred_company_sizes
 FROM users
 WHERE username = $1
 `
@@ -120,8 +139,22 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.Password,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PreferredCompanySizes,
 	)
 	return i, err
+}
+
+const getUserPreferredSizes = `-- name: GetUserPreferredSizes :one
+SELECT preferred_company_sizes
+FROM users
+WHERE id = $1
+`
+
+func (q *Queries) GetUserPreferredSizes(ctx context.Context, id int64) ([]string, error) {
+	row := q.db.QueryRow(ctx, getUserPreferredSizes, id)
+	var preferred_company_sizes []string
+	err := row.Scan(&preferred_company_sizes)
+	return preferred_company_sizes, err
 }
 
 const updateUserPassword = `-- name: UpdateUserPassword :exec
@@ -137,5 +170,22 @@ type UpdateUserPasswordParams struct {
 
 func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error {
 	_, err := q.db.Exec(ctx, updateUserPassword, arg.ID, arg.Password)
+	return err
+}
+
+const updateUserPreferredSizes = `-- name: UpdateUserPreferredSizes :exec
+UPDATE users
+SET preferred_company_sizes = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateUserPreferredSizesParams struct {
+	ID                    int64
+	PreferredCompanySizes []string
+}
+
+func (q *Queries) UpdateUserPreferredSizes(ctx context.Context, arg UpdateUserPreferredSizesParams) error {
+	_, err := q.db.Exec(ctx, updateUserPreferredSizes, arg.ID, arg.PreferredCompanySizes)
 	return err
 }

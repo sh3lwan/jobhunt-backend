@@ -37,6 +37,10 @@ func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *
 	protected("GET /api/v1/jobs", h.FetchJobs)
 	protected("POST /api/v1/jobs/{id}/embed", h.EmbedJob)
 
+	// User preferences (target company size, drives auto-crawl)
+	protected("GET /api/v1/preferences", h.GetPreferences)
+	protected("PUT /api/v1/preferences", h.UpdatePreferences)
+
 	// Pipeline control
 	protected("GET /api/v1/stats", h.PipelineStats)
 	protected("GET /api/v1/scrape/tasks", h.ScrapeTasks)

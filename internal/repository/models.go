@@ -90,10 +90,11 @@ type JobsEmbedding struct {
 }
 
 type User struct {
-	ID        int64
-	Username  string
-	Email     string
-	Password  string
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID                    int64
+	Username              string
+	Email                 string
+	Password              string
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	PreferredCompanySizes []string
 }
