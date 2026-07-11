@@ -49,6 +49,46 @@ func (q *Queries) CreateCVAnalysis(ctx context.Context, arg CreateCVAnalysisPara
 	return i, err
 }
 
+const deleteCVAnalysis = `-- name: DeleteCVAnalysis :execrows
+DELETE FROM cv_analyses
+WHERE id = $1 AND user_id = $2
+`
+
+type DeleteCVAnalysisParams struct {
+	ID     int64
+	UserID pgtype.Int8
+}
+
+// Owner-scoped delete of the CV row; returns rows affected so the caller can
+// confirm the CV existed and belonged to the user.
+func (q *Queries) DeleteCVAnalysis(ctx context.Context, arg DeleteCVAnalysisParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCVAnalysis, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCVEmbedding = `-- name: DeleteCVEmbedding :exec
+DELETE FROM cv_embeddings
+WHERE cv_id = $1
+`
+
+func (q *Queries) DeleteCVEmbedding(ctx context.Context, cvID int64) error {
+	_, err := q.db.Exec(ctx, deleteCVEmbedding, cvID)
+	return err
+}
+
+const deleteCVJobMatchesByCvId = `-- name: DeleteCVJobMatchesByCvId :exec
+DELETE FROM cv_job_matches
+WHERE cv_id = $1
+`
+
+func (q *Queries) DeleteCVJobMatchesByCvId(ctx context.Context, cvID int64) error {
+	_, err := q.db.Exec(ctx, deleteCVJobMatchesByCvId, cvID)
+	return err
+}
+
 const getAllCVAnalysis = `-- name: GetAllCVAnalysis :many
 SELECT id, original_name, file_name, parsed_text, structured_json, status, user_id, created_at, updated_at, errors
 FROM cv_analyses

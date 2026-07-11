@@ -66,7 +66,7 @@ func loadEnvironmentVariables() (*server.Config, error) {
 		JwtSecret:   utils.GetEnvOrDefault("JWT_SECRET", ""),
 
 		ScraperTopic:    utils.GetEnvOrDefault("KAFKA_SCRAPER_TOPIC", "job-scraping-requests"),
-		ScrapePlatforms: splitCSV(utils.GetEnvOrDefault("SCRAPE_PLATFORMS", "greenhouse,remotive")),
+		ScrapePlatforms: splitCSV(utils.GetEnvOrDefault("SCRAPE_PLATFORMS", "greenhouse,ashby,lever,remotive")),
 		ParserURL:       utils.GetEnvOrDefault("PARSER_URL", "http://localhost:5001"),
 
 		GoogleClientID:     utils.GetEnvOrDefault("GOOGLE_CLIENT_ID", ""),

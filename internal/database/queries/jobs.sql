@@ -141,6 +141,8 @@ LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
 WHERE (sqlc.narg(sources)::text[] IS NULL OR j.source = ANY(sqlc.narg(sources)::text[]))
   AND (sqlc.narg(min_percentage)::numeric IS NULL
        OR COALESCE(m.rerank_score, m.percentage) >= sqlc.narg(min_percentage)::numeric)
+  AND (sqlc.narg(max_age_days)::int IS NULL
+       OR j.publish_at >= now() - make_interval(days => sqlc.narg(max_age_days)::int))
   AND (sqlc.narg(search)::text IS NULL
        OR j.title ILIKE '%' || sqlc.narg(search)::text || '%'
        OR j.company ILIKE '%' || sqlc.narg(search)::text || '%'
@@ -155,6 +157,8 @@ LEFT JOIN cv_job_matches AS m ON m.job_id = j.id AND m.cv_id = sqlc.arg(cv_id)
 WHERE (sqlc.narg(sources)::text[] IS NULL OR j.source = ANY(sqlc.narg(sources)::text[]))
   AND (sqlc.narg(min_percentage)::numeric IS NULL
        OR COALESCE(m.rerank_score, m.percentage) >= sqlc.narg(min_percentage)::numeric)
+  AND (sqlc.narg(max_age_days)::int IS NULL
+       OR j.publish_at >= now() - make_interval(days => sqlc.narg(max_age_days)::int))
   AND (sqlc.narg(search)::text IS NULL
        OR j.title ILIKE '%' || sqlc.narg(search)::text || '%'
        OR j.company ILIKE '%' || sqlc.narg(search)::text || '%'

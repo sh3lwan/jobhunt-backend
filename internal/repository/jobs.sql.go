@@ -19,16 +19,19 @@ LEFT JOIN cv_job_matches AS m ON m.job_id = j.id AND m.cv_id = $1
 WHERE ($2::text[] IS NULL OR j.source = ANY($2::text[]))
   AND ($3::numeric IS NULL
        OR COALESCE(m.rerank_score, m.percentage) >= $3::numeric)
-  AND ($4::text IS NULL
-       OR j.title ILIKE '%' || $4::text || '%'
-       OR j.company ILIKE '%' || $4::text || '%'
-       OR j.description ILIKE '%' || $4::text || '%')
+  AND ($4::int IS NULL
+       OR j.publish_at >= now() - make_interval(days => $4::int))
+  AND ($5::text IS NULL
+       OR j.title ILIKE '%' || $5::text || '%'
+       OR j.company ILIKE '%' || $5::text || '%'
+       OR j.description ILIKE '%' || $5::text || '%')
 `
 
 type CountMatchedJobsParams struct {
 	CvID          int64
 	Sources       []string
 	MinPercentage pgtype.Numeric
+	MaxAgeDays    pgtype.Int4
 	Search        pgtype.Text
 }
 
@@ -37,6 +40,7 @@ func (q *Queries) CountMatchedJobs(ctx context.Context, arg CountMatchedJobsPara
 		arg.CvID,
 		arg.Sources,
 		arg.MinPercentage,
+		arg.MaxAgeDays,
 		arg.Search,
 	)
 	var count int64
@@ -392,18 +396,21 @@ LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
 WHERE ($2::text[] IS NULL OR j.source = ANY($2::text[]))
   AND ($3::numeric IS NULL
        OR COALESCE(m.rerank_score, m.percentage) >= $3::numeric)
-  AND ($4::text IS NULL
-       OR j.title ILIKE '%' || $4::text || '%'
-       OR j.company ILIKE '%' || $4::text || '%'
-       OR j.description ILIKE '%' || $4::text || '%')
+  AND ($4::int IS NULL
+       OR j.publish_at >= now() - make_interval(days => $4::int))
+  AND ($5::text IS NULL
+       OR j.title ILIKE '%' || $5::text || '%'
+       OR j.company ILIKE '%' || $5::text || '%'
+       OR j.description ILIKE '%' || $5::text || '%')
 ORDER BY COALESCE(m.rerank_score, m.percentage) DESC NULLS LAST, j.publish_at DESC
-LIMIT $6 OFFSET $5
+LIMIT $7 OFFSET $6
 `
 
 type GetMatchedJobsParams struct {
 	CvID          int64
 	Sources       []string
 	MinPercentage pgtype.Numeric
+	MaxAgeDays    pgtype.Int4
 	Search        pgtype.Text
 	ResultOffset  int32
 	MaxResults    int32
@@ -437,6 +444,7 @@ func (q *Queries) GetMatchedJobs(ctx context.Context, arg GetMatchedJobsParams) 
 		arg.CvID,
 		arg.Sources,
 		arg.MinPercentage,
+		arg.MaxAgeDays,
 		arg.Search,
 		arg.ResultOffset,
 		arg.MaxResults,

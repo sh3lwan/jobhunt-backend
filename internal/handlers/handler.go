@@ -212,10 +212,10 @@ func (h *Handler) TriggerScrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validPlatforms := map[string]bool{"greenhouse": true, "remotive": true, "linkedin": true}
+	validPlatforms := map[string]bool{"greenhouse": true, "ashby": true, "lever": true, "remotive": true, "linkedin": true}
 
 	if !validPlatforms[req.Platform] {
-		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "platform must be one of: greenhouse, remotive, linkedin"})
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "platform must be one of: greenhouse, ashby, lever, remotive, linkedin"})
 		return
 	}
 
@@ -459,6 +459,29 @@ func (h *Handler) UpdateCV(w http.ResponseWriter, r *http.Request) {
 	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "CV updated"})
 }
 
+// DeleteCV removes a CV and everything derived from it. Since crawling is
+// CV-driven, deleting a CV stops it from generating any further job fetches.
+func (h *Handler) DeleteCV(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid CV id"})
+		return
+	}
+
+	user, err := utils.GetUserFromContext(r.Context())
+	if err != nil {
+		utils.RespondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		return
+	}
+
+	if err := h.cvService.DeleteCV(r.Context(), id, user.ID); err != nil {
+		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, map[string]string{"message": "CV deleted"})
+}
+
 func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
@@ -482,6 +505,13 @@ func (h *Handler) FetchJobs(w http.ResponseWriter, r *http.Request) {
 	if minMatch := query.Get("min_match"); minMatch != "" {
 		if v, err := strconv.ParseFloat(minMatch, 64); err == nil {
 			filter.MinPercentage = &v
+		}
+	}
+
+	if maxAge := query.Get("max_age_days"); maxAge != "" {
+		if v, err := strconv.Atoi(maxAge); err == nil && v > 0 {
+			age := int32(v)
+			filter.MaxAgeDays = &age
 		}
 	}
 

@@ -26,6 +26,7 @@ func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *
 	protected("GET /api/v1/cvs", h.ListCVs)
 	protected("GET /api/v1/cvs/{id}", h.GetCV)
 	protected("PUT /api/v1/cvs/{id}", h.UpdateCV)
+	protected("DELETE /api/v1/cvs/{id}", h.DeleteCV)
 	protected("POST /api/v1/cvs/{id}/embed", h.EmbedCV)
 	protected("POST /api/v1/cvs/{id}/fetch", h.FetchJobsForCV)
 	protected("POST /api/v1/cvs/{id}/retry", h.RetryCVProceassing)

@@ -48,6 +48,20 @@ SET errors = $2,
     status = 'error'
 WHERE id = $1;
 
+-- Owner-scoped delete of the CV row; returns rows affected so the caller can
+-- confirm the CV existed and belonged to the user.
+-- name: DeleteCVAnalysis :execrows
+DELETE FROM cv_analyses
+WHERE id = $1 AND user_id = $2;
+
+-- name: DeleteCVEmbedding :exec
+DELETE FROM cv_embeddings
+WHERE cv_id = $1;
+
+-- name: DeleteCVJobMatchesByCvId :exec
+DELETE FROM cv_job_matches
+WHERE cv_id = $1;
+
 -- name: InsertCVEmbedding :exec
 INSERT INTO cv_embeddings (cv_id, canonical_text, skills_text, responsibilities_text, canonical_text_embeddings, skills_text_embeddings, responsibilities_text_embeddings)
 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (cv_id) DO

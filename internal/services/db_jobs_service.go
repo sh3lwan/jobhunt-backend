@@ -113,6 +113,7 @@ type MatchedJobsFilter struct {
 	CvID          int64
 	Sources       []string
 	MinPercentage *float64
+	MaxAgeDays    *int32
 	Search        string
 	Limit         int32
 	Offset        int32
@@ -135,10 +136,16 @@ func (s *DBJobService) ListMatchedJobs(ctx context.Context, filter MatchedJobsFi
 		search = pgtype.Text{String: filter.Search, Valid: true}
 	}
 
+	var maxAge pgtype.Int4
+	if filter.MaxAgeDays != nil {
+		maxAge = pgtype.Int4{Int32: *filter.MaxAgeDays, Valid: true}
+	}
+
 	rows, err := s.queries.GetMatchedJobs(ctx, repository.GetMatchedJobsParams{
 		CvID:          filter.CvID,
 		Sources:       filter.Sources,
 		MinPercentage: minPct,
+		MaxAgeDays:    maxAge,
 		Search:        search,
 		MaxResults:    filter.Limit,
 		ResultOffset:  filter.Offset,
@@ -152,6 +159,7 @@ func (s *DBJobService) ListMatchedJobs(ctx context.Context, filter MatchedJobsFi
 		CvID:          filter.CvID,
 		Sources:       filter.Sources,
 		MinPercentage: minPct,
+		MaxAgeDays:    maxAge,
 		Search:        search,
 	})
 

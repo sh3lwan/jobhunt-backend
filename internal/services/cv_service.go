@@ -245,6 +245,31 @@ func (s *CVService) Parse(ctx context.Context, cvAnalysis *repository.CvAnalysis
 	return cvData, nil
 }
 
+// DeleteCV removes a CV and its derived rows (matches, embedding), scoped to
+// the owner. Children are deleted before the parent to satisfy the FK on
+// cv_embeddings. Returns an error if the CV doesn't exist or isn't the user's.
+func (s *CVService) DeleteCV(ctx context.Context, id, userID int64) error {
+	// Remove derived rows first (embedding has a FK to cv_analyses).
+	if err := s.repo.DeleteCVJobMatchesByCvId(ctx, id); err != nil {
+		return fmt.Errorf("❌ Failed to delete cv-job matches: %w", err)
+	}
+	if err := s.repo.DeleteCVEmbedding(ctx, id); err != nil {
+		return fmt.Errorf("❌ Failed to delete cv embedding: %w", err)
+	}
+
+	rows, err := s.repo.DeleteCVAnalysis(ctx, repository.DeleteCVAnalysisParams{
+		ID:     id,
+		UserID: pgtype.Int8{Int64: userID, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("❌ Failed to delete cv: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("cv not found or not owned by user")
+	}
+	return nil
+}
+
 // UpdateStructuredJSON persists a user edit of the parsed CV, scoped to the
 // owner. Only the JSON changes — status is left as-is.
 func (s *CVService) UpdateStructuredJSON(ctx context.Context, id, userID int64, structuredJSON []byte) error {
