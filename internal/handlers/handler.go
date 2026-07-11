@@ -120,8 +120,32 @@ func (h *Handler) GoogleAuthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 var validSizeBands = map[string]bool{"small": true, "midsize": true, "large": true, "enterprise": true}
+var validStages = map[string]bool{"seed": true, "early": true, "growth": true, "late": true, "public": true}
+var validIndustries = map[string]bool{
+	"fintech": true, "ai_ml": true, "devtools": true, "data": true, "security": true,
+	"healthtech": true, "biotech": true, "ecommerce": true, "saas": true, "crypto": true,
+	"climate": true, "logistics": true, "consumer": true, "gaming": true,
+}
 
-// GetPreferences returns the user's target company-size preference.
+func filterValid(in []string, valid map[string]bool) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if valid[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func orEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// GetPreferences returns the user's target company-type preferences (size,
+// industry, funding stage).
 func (h *Handler) GetPreferences(w http.ResponseWriter, r *http.Request) {
 	user, err := utils.GetUserFromContext(r.Context())
 	if err != nil {
@@ -129,21 +153,21 @@ func (h *Handler) GetPreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sizes, err := h.queries.GetUserPreferredSizes(r.Context(), user.ID)
+	prefs, err := h.queries.GetUserPreferences(r.Context(), user.ID)
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if sizes == nil {
-		sizes = []string{}
-	}
-
-	utils.RespondJSON(w, http.StatusOK, map[string]any{"preferred_company_sizes": sizes})
+	utils.RespondJSON(w, http.StatusOK, map[string]any{
+		"preferred_company_sizes": orEmpty(prefs.PreferredCompanySizes),
+		"preferred_industries":    orEmpty(prefs.PreferredIndustries),
+		"preferred_stages":        orEmpty(prefs.PreferredStages),
+	})
 }
 
-// UpdatePreferences sets the user's target company-size bands. This drives the
-// automatic CV-driven crawl — an empty list means all sizes.
+// UpdatePreferences sets the user's target company-type filters. These drive
+// the automatic CV-driven crawl — an empty list on any dimension means "all".
 func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 	user, err := utils.GetUserFromContext(r.Context())
 	if err != nil {
@@ -153,28 +177,33 @@ func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		PreferredCompanySizes []string `json:"preferred_company_sizes"`
+		PreferredIndustries   []string `json:"preferred_industries"`
+		PreferredStages       []string `json:"preferred_stages"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		utils.RespondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
 		return
 	}
 
-	cleaned := make([]string, 0, len(body.PreferredCompanySizes))
-	for _, s := range body.PreferredCompanySizes {
-		if validSizeBands[s] {
-			cleaned = append(cleaned, s)
-		}
-	}
+	sizes := filterValid(body.PreferredCompanySizes, validSizeBands)
+	industries := filterValid(body.PreferredIndustries, validIndustries)
+	stages := filterValid(body.PreferredStages, validStages)
 
-	if err := h.queries.UpdateUserPreferredSizes(r.Context(), repository.UpdateUserPreferredSizesParams{
+	if err := h.queries.UpdateUserPreferences(r.Context(), repository.UpdateUserPreferencesParams{
 		ID:                    user.ID,
-		PreferredCompanySizes: cleaned,
+		PreferredCompanySizes: sizes,
+		PreferredIndustries:   industries,
+		PreferredStages:       stages,
 	}); err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	utils.RespondJSON(w, http.StatusOK, map[string]any{"preferred_company_sizes": cleaned})
+	utils.RespondJSON(w, http.StatusOK, map[string]any{
+		"preferred_company_sizes": sizes,
+		"preferred_industries":    industries,
+		"preferred_stages":        stages,
+	})
 }
 
 // PipelineStats powers the dashboard KPIs and the Sources page.
@@ -260,10 +289,12 @@ func (h *Handler) ScrapeTasks(w http.ResponseWriter, r *http.Request) {
 // TriggerScrape enqueues an on-demand scraping run.
 func (h *Handler) TriggerScrape(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Platform  string   `json:"platform"`
-		Skills    []string `json:"skills"`
-		Location  string   `json:"location"`
-		SizeBands []string `json:"size_bands"`
+		Platform   string   `json:"platform"`
+		Skills     []string `json:"skills"`
+		Location   string   `json:"location"`
+		SizeBands  []string `json:"size_bands"`
+		Industries []string `json:"industries"`
+		Stages     []string `json:"stages"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -283,14 +314,11 @@ func (h *Handler) TriggerScrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sizeBands := make([]string, 0, len(req.SizeBands))
-	for _, s := range req.SizeBands {
-		if validSizeBands[s] {
-			sizeBands = append(sizeBands, s)
-		}
-	}
+	sizeBands := filterValid(req.SizeBands, validSizeBands)
+	industries := filterValid(req.Industries, validIndustries)
+	stages := filterValid(req.Stages, validStages)
 
-	taskID, err := h.scrapeService.Dispatch(req.Platform, req.Skills, req.Location, sizeBands)
+	taskID, err := h.scrapeService.Dispatch(req.Platform, req.Skills, req.Location, sizeBands, industries, stages)
 
 	if err != nil {
 		utils.RespondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

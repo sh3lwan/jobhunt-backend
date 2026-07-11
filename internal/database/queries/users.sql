@@ -23,21 +23,23 @@ UPDATE users
 SET password = $2
 WHERE id = $1;
 
--- name: GetUserPreferredSizes :one
-SELECT preferred_company_sizes
+-- name: GetUserPreferences :one
+SELECT preferred_company_sizes, preferred_industries, preferred_stages
 FROM users
 WHERE id = $1;
 
--- name: UpdateUserPreferredSizes :exec
+-- name: UpdateUserPreferences :exec
 UPDATE users
 SET preferred_company_sizes = $2,
+    preferred_industries    = $3,
+    preferred_stages        = $4,
     updated_at = now()
 WHERE id = $1;
 
--- Company-size preference for the owner of a CV — used by the CV-driven
+-- Company-type preferences for the owner of a CV — used by the CV-driven
 -- crawl dispatch to scope scrapes without a separate lookup round-trip.
--- name: GetPreferredSizesByCvId :one
-SELECT u.preferred_company_sizes
+-- name: GetPreferencesByCvId :one
+SELECT u.preferred_company_sizes, u.preferred_industries, u.preferred_stages
 FROM cv_analyses c
 JOIN users u ON u.id = c.user_id
 WHERE c.id = $1;

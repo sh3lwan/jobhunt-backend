@@ -21,7 +21,7 @@ func NewScrapeService(producer *mq.Producer) *ScrapeService {
 }
 
 // Dispatch enqueues one scraping request and returns its task id.
-func (s *ScrapeService) Dispatch(platform string, skills []string, location string, sizeBands []string) (string, error) {
+func (s *ScrapeService) Dispatch(platform string, skills []string, location string, sizeBands, industries, stages []string) (string, error) {
 	if s.producer == nil {
 		return "", fmt.Errorf("scrape dispatch is not configured")
 	}
@@ -40,6 +40,12 @@ func (s *ScrapeService) Dispatch(platform string, skills []string, location stri
 
 	if len(sizeBands) > 0 {
 		request["sizeBands"] = sizeBands
+	}
+	if len(industries) > 0 {
+		request["industries"] = industries
+	}
+	if len(stages) > 0 {
+		request["stages"] = stages
 	}
 
 	payload, err := json.Marshal(request)

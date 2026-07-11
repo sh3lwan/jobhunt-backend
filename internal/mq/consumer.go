@@ -284,12 +284,11 @@ func (c *Consumer) dispatchScrapeForCV(cvID int64, cvFields map[string]any) {
 
 	location, _ := cvFields["location_preference"].(string)
 
-	// Company-size preference for this CV's owner narrows the crawl to the
-	// sizes the user selected. Best-effort — an error just means "all sizes".
-	sizeBands, err := c.Queries.GetPreferredSizesByCvId(context.Background(), cvID)
+	// Company-type preferences for this CV's owner narrow the crawl. Best-effort
+	// — an error just means "no filter" (all companies).
+	prefs, err := c.Queries.GetPreferencesByCvId(context.Background(), cvID)
 	if err != nil {
-		log.Printf("CV %d: could not load size preference (%v) — crawling all sizes", cvID, err)
-		sizeBands = nil
+		log.Printf("CV %d: could not load company preferences (%v) — crawling all", cvID, err)
 	}
 
 	for _, platform := range c.ScrapePlatforms {
@@ -303,8 +302,14 @@ func (c *Consumer) dispatchScrapeForCV(cvID int64, cvFields map[string]any) {
 			request["location"] = location
 		}
 
-		if len(sizeBands) > 0 {
-			request["sizeBands"] = sizeBands
+		if len(prefs.PreferredCompanySizes) > 0 {
+			request["sizeBands"] = prefs.PreferredCompanySizes
+		}
+		if len(prefs.PreferredIndustries) > 0 {
+			request["industries"] = prefs.PreferredIndustries
+		}
+		if len(prefs.PreferredStages) > 0 {
+			request["stages"] = prefs.PreferredStages
 		}
 
 		payload, err := json.Marshal(request)

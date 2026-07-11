@@ -97,4 +97,6 @@ type User struct {
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 	PreferredCompanySizes []string
+	PreferredIndustries   []string
+	PreferredStages       []string
 }
