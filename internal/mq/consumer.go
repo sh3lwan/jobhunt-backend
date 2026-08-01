@@ -81,19 +81,41 @@ func (c *Consumer) Consume() error {
 			c.Reader.CommitMessages(ctx, msg)
 		}
 
-		// Process with bounded retries
+		// Process with bounded retries per round; a round that fails while
+		// the database is unreachable does not count — the consumer pauses
+		// until the DB is back and retries the same message, so an outage
+		// delays results instead of losing them.
 		const maxAttempts = 5
 		var lastErr error
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			log.Printf("Processing message with key %d, data: %+v (attempt %d/%d)\n", key, body, attempt, maxAttempts)
-			if err := c.processMessage(ctx, key, body, msg.Value); err != nil {
-				lastErr = err
-				fmt.Printf("Error processing message (attempt %d/%d): %s\n", attempt, maxAttempts, err)
-				// exponential-ish backoff: 1s, 2s, 4s, 8s, 16s
-				time.Sleep(time.Second << (attempt - 1))
+		for {
+			lastErr = nil
+			for attempt := 1; attempt <= maxAttempts; attempt++ {
+				log.Printf("Processing message with key %d (attempt %d/%d)\n", key, attempt, maxAttempts)
+				if err := c.processMessage(ctx, key, body, msg.Value); err != nil {
+					lastErr = err
+					fmt.Printf("Error processing message (attempt %d/%d): %s\n", attempt, maxAttempts, err)
+					// exponential-ish backoff: 1s, 2s, 4s, 8s, 16s
+					time.Sleep(time.Second << (attempt - 1))
+					continue
+				}
+				lastErr = nil
+				break
+			}
+
+			if lastErr == nil {
+				break
+			}
+
+			if c.Pool.Ping(ctx) != nil {
+				log.Printf("database unreachable — pausing consumer until it returns (key %d)", key)
+				for c.Pool.Ping(ctx) != nil {
+					time.Sleep(15 * time.Second)
+				}
+				log.Printf("database is back — retrying message with key %d", key)
 				continue
 			}
-			lastErr = nil
+
+			// DB is healthy and the message still fails → treat as poison.
 			break
 		}
 

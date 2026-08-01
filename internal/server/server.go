@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,6 +34,12 @@ type Config struct {
 
 	// ParserURL is the jobparser HTTP base (LLM rerank endpoint).
 	ParserURL string
+
+	// CandidateConstraints describes the candidate's location and
+	// work-authorization situation for the rerank eligibility gate
+	// (e.g. "Based in Cairo, Egypt; needs visa sponsorship for
+	// country-restricted roles"). Empty = eligibility treated as unknown.
+	CandidateConstraints string
 
 	// Google OAuth (optional). When client ID/secret are empty, the Google
 	// sign-in button degrades to a "not configured" message.
@@ -81,7 +88,7 @@ func NewServer(config *Config, logger *log.Logger) (*Server, error) {
 	// Create services
 	authService := services.NewAuthService(config.JwtSecret, queries)
 
-	rerankService := services.NewRerankService(queries, config.ParserURL)
+	rerankService := services.NewRerankService(queries, config.ParserURL, config.CandidateConstraints)
 
 	var scrapeService *services.ScrapeService
 	if config.ScraperTopic != "" {
@@ -155,12 +162,19 @@ func (s *Server) Start(ctx context.Context) error {
 	// Close kafka producer on shutdown
 	defer s.producer.Close()
 
-	// Start consumer in a goroutine
-	go func() {
-		if err := s.consumer.Consume(); err != nil {
-			s.logger.Printf("Consumer error: %v", err)
-		}
-	}()
+	// DISABLE_BACKGROUND=true runs the API only — no Kafka consumer, no cron
+	// scheduler. Used on the VPS, where the Mac remains the pipeline driver
+	// (avoids duplicate rerank/embedding work: the queries have no SKIP LOCKED).
+	background := strings.ToLower(os.Getenv("DISABLE_BACKGROUND")) != "true"
+
+	if background {
+		// Start consumer in a goroutine
+		go func() {
+			if err := s.consumer.Consume(); err != nil {
+				s.logger.Printf("Consumer error: %v", err)
+			}
+		}()
+	}
 
 	// Start server in a goroutine
 	serverErrChan := make(chan error, 1)
@@ -171,13 +185,15 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 
-	queries := repository.New(s.db)
+	if background {
+		queries := repository.New(s.db)
 
-	embeddingSvc := services.NewEmbeddingService(s.producer, queries)
+		embeddingSvc := services.NewEmbeddingService(s.producer, queries)
 
-	rerankSvc := services.NewRerankService(queries, s.config.ParserURL)
+		rerankSvc := services.NewRerankService(queries, s.config.ParserURL, s.config.CandidateConstraints)
 
-	schedular.StartSchedular(queries, embeddingSvc, rerankSvc, ctx)
+		schedular.StartSchedular(queries, embeddingSvc, rerankSvc, ctx)
+	}
 
 	// Wait for shutdown signal or server error
 	select {

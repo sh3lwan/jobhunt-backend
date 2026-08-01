@@ -1,0 +1,3 @@
+ALTER TABLE jobs DROP COLUMN IF EXISTS geo_detail;
+ALTER TABLE jobs DROP COLUMN IF EXISTS geo_sponsorship;
+ALTER TABLE jobs DROP COLUMN IF EXISTS geo_restriction;

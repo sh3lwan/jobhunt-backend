@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/sh3lwan/jobhunter/internal/server"
@@ -23,10 +24,14 @@ func main() {
 		logger.Fatalf("Failed to validate config: %v", err)
 	}
 
+	// Dependencies (Postgres, Kafka) may not be up yet — keep retrying
+	// instead of dying, so the API comes up by itself once they return.
 	srv, err := server.NewServer(config, logger)
 
-	if err != nil {
-		logger.Fatalf("Failed to create server: %v", err)
+	for err != nil {
+		logger.Printf("Failed to create server (dependency down?): %v — retrying in 10s", err)
+		time.Sleep(10 * time.Second)
+		srv, err = server.NewServer(config, logger)
 	}
 
 	// Setup graceful shutdown
@@ -68,6 +73,8 @@ func loadEnvironmentVariables() (*server.Config, error) {
 		ScraperTopic:    utils.GetEnvOrDefault("KAFKA_SCRAPER_TOPIC", "job-scraping-requests"),
 		ScrapePlatforms: splitCSV(utils.GetEnvOrDefault("SCRAPE_PLATFORMS", "greenhouse,ashby,lever,remotive")),
 		ParserURL:       utils.GetEnvOrDefault("PARSER_URL", "http://localhost:5001"),
+
+		CandidateConstraints: utils.GetEnvOrDefault("CANDIDATE_CONSTRAINTS", ""),
 
 		GoogleClientID:     utils.GetEnvOrDefault("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: utils.GetEnvOrDefault("GOOGLE_CLIENT_SECRET", ""),

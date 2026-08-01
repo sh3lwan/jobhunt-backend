@@ -9,6 +9,22 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+type Application struct {
+	ID                   int64
+	UserID               int64
+	CvID                 pgtype.Int8
+	JobID                int64
+	Status               string
+	FilledInputs         []byte
+	Error                pgtype.Text
+	SubmittedAt          pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	SubmissionScreenshot []byte
+	ResultScreenshot     []byte
+	TailoredCvPath       pgtype.Text
+}
+
 type CvAnalysis struct {
 	ID             int64
 	OriginalName   string
@@ -49,6 +65,19 @@ type CvJobMatch struct {
 	RerankedAt          pgtype.Timestamptz
 }
 
+type FormDetection struct {
+	Url        string
+	Fields     []byte
+	FieldCount int32
+	DetectedAt pgtype.Timestamptz
+}
+
+type FormNavigation struct {
+	Host      string
+	Nav       []byte
+	UpdatedAt pgtype.Timestamptz
+}
+
 type Job struct {
 	ID                   int32
 	SourceID             pgtype.Text
@@ -63,6 +92,28 @@ type Job struct {
 	PublishAt            pgtype.Timestamptz
 	CreatedAt            pgtype.Timestamptz
 	EmbeddingRequestedAt pgtype.Timestamptz
+	// Detected location/work-auth restriction label (e.g. us-only, canada-only, onsite); NULL = unknown or unrestricted
+	GeoRestriction pgtype.Text
+	// true = JD offers visa sponsorship, false = JD explicitly refuses it, NULL = not stated
+	GeoSponsorship pgtype.Bool
+	// Raw JD phrase the restriction was detected from
+	GeoDetail pgtype.Text
+}
+
+type JobEvaluation struct {
+	CvID           int64
+	JobID          int32
+	Score          pgtype.Numeric
+	FinalDecision  pgtype.Text
+	MachineSummary []byte
+	ReportPath     pgtype.Text
+	TailoredCvPath pgtype.Text
+	Evaluator      string
+	Model          pgtype.Text
+	EvaluatedAt    pgtype.Timestamptz
+	Status         string
+	RequestedAt    pgtype.Timestamptz
+	Error          pgtype.Text
 }
 
 type JobFetchTask struct {
@@ -87,6 +138,13 @@ type JobsEmbedding struct {
 	ResponsibilitiesTextEmbeddings pgvector.Vector
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
+}
+
+type LearnedAnswer struct {
+	UserID    int64
+	Label     string
+	Value     string
+	UpdatedAt pgtype.Timestamptz
 }
 
 type User struct {

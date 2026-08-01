@@ -41,6 +41,19 @@ func NewRouter(h *handlers.Handler, authMiddleware *middleware.AuthMiddleware) *
 	protected("GET /api/v1/preferences", h.GetPreferences)
 	protected("PUT /api/v1/preferences", h.UpdatePreferences)
 
+	// Deep evaluations (career-ops via jobbridge)
+	protected("POST /api/v1/evaluations", h.RequestEvaluations)
+	protected("GET /api/v1/evaluations/{cvId}/{jobId}", h.GetEvaluation)
+	protected("GET /api/v1/evaluations/{cvId}/{jobId}/cv", h.GetEvaluationTailoredCv)
+
+	// Auto-apply queue
+	protected("POST /api/v1/applications", h.QueueApplications)
+	protected("GET /api/v1/applications", h.ListApplications)
+	protected("POST /api/v1/applications/{id}/approve", h.ApproveApplication)
+	protected("POST /api/v1/applications/{id}/discard", h.DiscardApplication)
+	protected("POST /api/v1/applications/{id}/inputs", h.UpdateApplicationInputs)
+	protected("GET /api/v1/applications/{id}/screenshot", h.GetApplicationScreenshot)
+
 	// Pipeline control
 	protected("GET /api/v1/stats", h.PipelineStats)
 	protected("GET /api/v1/scrape/tasks", h.ScrapeTasks)

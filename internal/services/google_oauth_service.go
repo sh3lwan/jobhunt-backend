@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -101,6 +102,22 @@ func (s *GoogleOAuthService) HandleCallback(ctx context.Context, code string) (s
 
 	if info.Email == "" {
 		return "", fmt.Errorf("google did not return an email")
+	}
+
+	// On a public deployment, Google sign-in would otherwise create an account
+	// for anyone. ALLOWED_GOOGLE_EMAILS (comma-separated) restricts who may
+	// sign in; unset keeps the open behavior for local development.
+	if allowed := os.Getenv("ALLOWED_GOOGLE_EMAILS"); allowed != "" {
+		ok := false
+		for _, email := range strings.Split(allowed, ",") {
+			if strings.EqualFold(strings.TrimSpace(email), info.Email) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return "", fmt.Errorf("email %s is not allowed to sign in", info.Email)
+		}
 	}
 
 	user, err := s.upsertUser(ctx, info)

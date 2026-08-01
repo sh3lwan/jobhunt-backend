@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -18,9 +19,10 @@ import (
 // rerank endpoint and stores the recruiter-rubric assessment. Scores from the
 // reranker take precedence over the embedding percentage in listings.
 type RerankService struct {
-	queries   *repository.Queries
-	parserURL string
-	client    *http.Client
+	queries     *repository.Queries
+	parserURL   string
+	constraints string
+	client      *http.Client
 }
 
 type rerankAssessment struct {
@@ -31,10 +33,11 @@ type rerankAssessment struct {
 	Explanation  string   `json:"explanation"`
 }
 
-func NewRerankService(queries *repository.Queries, parserURL string) *RerankService {
+func NewRerankService(queries *repository.Queries, parserURL string, candidateConstraints string) *RerankService {
 	return &RerankService{
-		queries:   queries,
-		parserURL: parserURL,
+		queries:     queries,
+		parserURL:   parserURL,
+		constraints: candidateConstraints,
 		// One LLM call per request; local inference can take tens of seconds,
 		// and the first call after idle also pays model-load time.
 		client: &http.Client{Timeout: 300 * time.Second},
@@ -57,14 +60,27 @@ func (s *RerankService) RerankPending(ctx context.Context, limit int32) (int, er
 			return done, ctx.Err()
 		}
 
-		assessment, err := s.rerankOne(ctx, match)
+		var assessment *rerankAssessment
 
-		if err != nil {
-			// Stop the whole batch on a request failure: a timeout means the
-			// parser/LLM is struggling, and firing more requests at it only
-			// piles up zombie generations. The next tick retries.
-			log.Printf("Rerank failed for cv %d job %d (stopping batch): %v", match.CvID, match.JobID, err)
-			return done, nil
+		if capScore, note, blocked := s.geoIneligibility(match); blocked {
+			// The eligibility gate fully determines the score, and local
+			// inference is the pipeline's bottleneck — skip the LLM entirely.
+			assessment = &rerankAssessment{
+				FitScore:     capScore,
+				SeniorityFit: "not_assessed",
+				Gaps:         []string{note},
+				Explanation:  "Deterministic geo-eligibility cap; LLM rerank skipped.",
+			}
+		} else {
+			assessment, err = s.rerankOne(ctx, match)
+
+			if err != nil {
+				// Stop the whole batch on a request failure: a timeout means the
+				// parser/LLM is struggling, and firing more requests at it only
+				// piles up zombie generations. The next tick retries.
+				log.Printf("Rerank failed for cv %d job %d (stopping batch): %v", match.CvID, match.JobID, err)
+				return done, nil
+			}
 		}
 
 		details, err := json.Marshal(map[string]any{
@@ -101,10 +117,51 @@ func (s *RerankService) RerankPending(ctx context.Context, limit int32) (int, er
 	return done, nil
 }
 
+// candidateLocalRe matches locations local to the candidate: an "in-country"
+// posting pinned to where they already live needs no visa and stays eligible.
+var candidateLocalRe = regexp.MustCompile(`(?i)\b(egypt|cairo)\b`)
+
+// geoIneligibility enforces the eligibility gate deterministically from the
+// scrape-time geo flags, instead of trusting the local LLM to apply its
+// prompt's cap. Active only when candidate constraints are configured (i.e.
+// the candidate has told us restricted postings are a problem for them):
+//   - restriction detected + sponsorship explicitly refused -> cap 25
+//   - restriction detected + sponsorship not mentioned      -> cap 45
+//   - sponsorship offered, open scope, or local in-country  -> eligible
+func (s *RerankService) geoIneligibility(match repository.GetMatchesNeedingRerankRow) (capScore int, note string, blocked bool) {
+	if s.constraints == "" || !match.GeoRestriction.Valid || match.GeoRestriction.String == "" {
+		return 0, "", false
+	}
+	if match.GeoSponsorship.Valid && match.GeoSponsorship.Bool {
+		return 0, "", false
+	}
+	if match.GeoRestriction.String == "in-country" && candidateLocalRe.MatchString(match.Location.String) {
+		return 0, "", false
+	}
+
+	capScore, note = 45, "location-restricted posting ("+match.GeoRestriction.String+"), sponsorship not mentioned — verify eligibility"
+	if match.GeoSponsorship.Valid && !match.GeoSponsorship.Bool {
+		capScore, note = 25, "location-restricted posting ("+match.GeoRestriction.String+") that explicitly refuses visa sponsorship"
+	}
+	return capScore, note, true
+}
+
 func (s *RerankService) rerankOne(ctx context.Context, match repository.GetMatchesNeedingRerankRow) (*rerankAssessment, error) {
+	geoSponsorship := "not stated"
+	if match.GeoSponsorship.Valid {
+		if match.GeoSponsorship.Bool {
+			geoSponsorship = "offered"
+		} else {
+			geoSponsorship = "refused"
+		}
+	}
+
 	payload, err := json.Marshal(map[string]any{
-		"cv_canonical": match.CvCanonical.String,
-		"cv_skills":    match.CvSkills.String,
+		"cv_canonical":          match.CvCanonical.String,
+		"cv_skills":             match.CvSkills.String,
+		"candidate_constraints": s.constraints,
+		"geo_restriction":       match.GeoRestriction.String,
+		"geo_sponsorship":       geoSponsorship,
 		"job": map[string]any{
 			"title":       match.Title.String,
 			"company":     match.Company.String,

@@ -16,6 +16,15 @@ type MatchedJob struct {
 	RerankScore         *float64 `json:"rerank_score,omitempty"`         // LLM recruiter-rubric score (authoritative when present)
 	RerankDetails       any      `json:"rerank_details,omitempty"`       // {explanation, strengths, gaps, seniority_fit}
 	Embedded            bool     `json:"embedded"`                       // Whether the job has been parsed + embedded yet
+
+	// Deep evaluation (career-ops A-G via jobbridge), when one exists for this CV+job.
+	EvalScore         *float64 `json:"eval_score,omitempty"`           // 1.0-5.0 global score
+	EvalDecision      string   `json:"eval_decision,omitempty"`        // Apply | Consider | Research first | Skip
+	EvalStatus        string   `json:"eval_status,omitempty"`          // requested | running | done | failed
+	EvalHardStops     any      `json:"eval_hard_stops,omitempty"`      // blocking gaps from the Machine Summary
+	EvalTailoredCvURL string   `json:"eval_tailored_cv,omitempty"`     // non-empty when a tailored CV PDF exists
+	GeoRestriction    string   `json:"geo_restriction,omitempty"`      // scrape-time detected location restriction label
+	GeoSponsorship    *bool    `json:"geo_sponsorship,omitempty"`      // true offered / false refused / absent unknown
 }
 
 // Job represents a job posting in the system.

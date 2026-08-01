@@ -82,7 +82,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) error {
 }
 
 const getAllJobs = `-- name: GetAllJobs :many
-SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at, embedding_requested_at
+SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at, embedding_requested_at, geo_restriction, geo_sponsorship, geo_detail
 FROM jobs
 WHERE ($1::text[] IS NULL OR source = ANY($1))
 ORDER BY publish_at DESC
@@ -118,6 +118,9 @@ func (q *Queries) GetAllJobs(ctx context.Context, arg GetAllJobsParams) ([]Job, 
 			&i.PublishAt,
 			&i.CreatedAt,
 			&i.EmbeddingRequestedAt,
+			&i.GeoRestriction,
+			&i.GeoSponsorship,
+			&i.GeoDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -130,7 +133,7 @@ func (q *Queries) GetAllJobs(ctx context.Context, arg GetAllJobsParams) ([]Job, 
 }
 
 const getJobById = `-- name: GetJobById :one
-SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at, embedding_requested_at
+SELECT id, source_id, source, title, company, logo, location, url, tags, description, publish_at, created_at, embedding_requested_at, geo_restriction, geo_sponsorship, geo_detail
 FROM jobs
 WHERE id = $1
 `
@@ -152,6 +155,9 @@ func (q *Queries) GetJobById(ctx context.Context, id int32) (Job, error) {
 		&i.PublishAt,
 		&i.CreatedAt,
 		&i.EmbeddingRequestedAt,
+		&i.GeoRestriction,
+		&i.GeoSponsorship,
+		&i.GeoDetail,
 	)
 	return i, err
 }
@@ -319,7 +325,7 @@ func (q *Queries) GetJobsBySource(ctx context.Context) ([]GetJobsBySourceRow, er
 }
 
 const getJobsMissingEmbeddings = `-- name: GetJobsMissingEmbeddings :many
-SELECT j.id, j.source_id, j.source, j.title, j.company, j.logo, j.location, j.url, j.tags, j.description, j.publish_at, j.created_at, j.embedding_requested_at
+SELECT j.id, j.source_id, j.source, j.title, j.company, j.logo, j.location, j.url, j.tags, j.description, j.publish_at, j.created_at, j.embedding_requested_at, j.geo_restriction, j.geo_sponsorship, j.geo_detail
 FROM jobs AS j
 LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
 WHERE je.job_id IS NULL
@@ -352,6 +358,9 @@ func (q *Queries) GetJobsMissingEmbeddings(ctx context.Context, limit int32) ([]
 			&i.PublishAt,
 			&i.CreatedAt,
 			&i.EmbeddingRequestedAt,
+			&i.GeoRestriction,
+			&i.GeoSponsorship,
+			&i.GeoDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -382,6 +391,8 @@ const getMatchedJobs = `-- name: GetMatchedJobs :many
 SELECT
   j.id, j.source_id, j.source, j.title, j.company, j.logo, j.location,
   j.url, j.tags, j.description, j.publish_at, j.created_at,
+  j.geo_restriction,
+  j.geo_sponsorship,
   m.percentage,
   m.canonical_pct,
   m.skills_pct,
@@ -389,10 +400,16 @@ SELECT
   m.domain_multiplier,
   m.rerank_score,
   m.rerank_details,
-  (je.job_id IS NOT NULL)::bool AS embedded
+  (je.job_id IS NOT NULL)::bool AS embedded,
+  ev.score          AS eval_score,
+  ev.final_decision AS eval_decision,
+  ev.status         AS eval_status,
+  ev.machine_summary->'hard_stops' AS eval_hard_stops,
+  ev.tailored_cv_path AS eval_tailored_cv_path
 FROM jobs AS j
 LEFT JOIN cv_job_matches AS m ON m.job_id = j.id AND m.cv_id = $1
 LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
+LEFT JOIN job_evaluations AS ev ON ev.job_id = j.id AND ev.cv_id = $1
 WHERE ($2::text[] IS NULL OR j.source = ANY($2::text[]))
   AND ($3::numeric IS NULL
        OR COALESCE(m.rerank_score, m.percentage) >= $3::numeric)
@@ -429,6 +446,8 @@ type GetMatchedJobsRow struct {
 	Description         pgtype.Text
 	PublishAt           pgtype.Timestamptz
 	CreatedAt           pgtype.Timestamptz
+	GeoRestriction      pgtype.Text
+	GeoSponsorship      pgtype.Bool
 	Percentage          pgtype.Numeric
 	CanonicalPct        pgtype.Numeric
 	SkillsPct           pgtype.Numeric
@@ -437,6 +456,11 @@ type GetMatchedJobsRow struct {
 	RerankScore         pgtype.Numeric
 	RerankDetails       []byte
 	Embedded            bool
+	EvalScore           pgtype.Numeric
+	EvalDecision        pgtype.Text
+	EvalStatus          pgtype.Text
+	EvalHardStops       interface{}
+	EvalTailoredCvPath  pgtype.Text
 }
 
 func (q *Queries) GetMatchedJobs(ctx context.Context, arg GetMatchedJobsParams) ([]GetMatchedJobsRow, error) {
@@ -469,6 +493,8 @@ func (q *Queries) GetMatchedJobs(ctx context.Context, arg GetMatchedJobsParams) 
 			&i.Description,
 			&i.PublishAt,
 			&i.CreatedAt,
+			&i.GeoRestriction,
+			&i.GeoSponsorship,
 			&i.Percentage,
 			&i.CanonicalPct,
 			&i.SkillsPct,
@@ -477,6 +503,11 @@ func (q *Queries) GetMatchedJobs(ctx context.Context, arg GetMatchedJobsParams) 
 			&i.RerankScore,
 			&i.RerankDetails,
 			&i.Embedded,
+			&i.EvalScore,
+			&i.EvalDecision,
+			&i.EvalStatus,
+			&i.EvalHardStops,
+			&i.EvalTailoredCvPath,
 		); err != nil {
 			return nil, err
 		}
@@ -498,6 +529,8 @@ SELECT
   j.location,
   j.tags,
   j.description,
+  j.geo_restriction,
+  j.geo_sponsorship,
   c.canonical_text AS cv_canonical,
   c.skills_text    AS cv_skills
 FROM cv_job_matches AS m
@@ -510,16 +543,18 @@ LIMIT $1
 `
 
 type GetMatchesNeedingRerankRow struct {
-	CvID        int64
-	JobID       int64
-	Percentage  pgtype.Numeric
-	Title       pgtype.Text
-	Company     pgtype.Text
-	Location    pgtype.Text
-	Tags        []string
-	Description pgtype.Text
-	CvCanonical pgtype.Text
-	CvSkills    pgtype.Text
+	CvID           int64
+	JobID          int64
+	Percentage     pgtype.Numeric
+	Title          pgtype.Text
+	Company        pgtype.Text
+	Location       pgtype.Text
+	Tags           []string
+	Description    pgtype.Text
+	GeoRestriction pgtype.Text
+	GeoSponsorship pgtype.Bool
+	CvCanonical    pgtype.Text
+	CvSkills       pgtype.Text
 }
 
 // Candidates for LLM reranking: strongest un-reranked matches first. The 35%
@@ -543,6 +578,8 @@ func (q *Queries) GetMatchesNeedingRerank(ctx context.Context, limit int32) ([]G
 			&i.Location,
 			&i.Tags,
 			&i.Description,
+			&i.GeoRestriction,
+			&i.GeoSponsorship,
 			&i.CvCanonical,
 			&i.CvSkills,
 		); err != nil {

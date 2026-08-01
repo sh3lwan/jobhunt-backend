@@ -127,6 +127,8 @@ FROM (
 SELECT
   j.id, j.source_id, j.source, j.title, j.company, j.logo, j.location,
   j.url, j.tags, j.description, j.publish_at, j.created_at,
+  j.geo_restriction,
+  j.geo_sponsorship,
   m.percentage,
   m.canonical_pct,
   m.skills_pct,
@@ -134,10 +136,16 @@ SELECT
   m.domain_multiplier,
   m.rerank_score,
   m.rerank_details,
-  (je.job_id IS NOT NULL)::bool AS embedded
+  (je.job_id IS NOT NULL)::bool AS embedded,
+  ev.score          AS eval_score,
+  ev.final_decision AS eval_decision,
+  ev.status         AS eval_status,
+  ev.machine_summary->'hard_stops' AS eval_hard_stops,
+  ev.tailored_cv_path AS eval_tailored_cv_path
 FROM jobs AS j
 LEFT JOIN cv_job_matches AS m ON m.job_id = j.id AND m.cv_id = sqlc.arg(cv_id)
 LEFT JOIN jobs_embeddings AS je ON je.job_id = j.id
+LEFT JOIN job_evaluations AS ev ON ev.job_id = j.id AND ev.cv_id = sqlc.arg(cv_id)
 WHERE (sqlc.narg(sources)::text[] IS NULL OR j.source = ANY(sqlc.narg(sources)::text[]))
   AND (sqlc.narg(min_percentage)::numeric IS NULL
        OR COALESCE(m.rerank_score, m.percentage) >= sqlc.narg(min_percentage)::numeric)
@@ -177,6 +185,8 @@ SELECT
   j.location,
   j.tags,
   j.description,
+  j.geo_restriction,
+  j.geo_sponsorship,
   c.canonical_text AS cv_canonical,
   c.skills_text    AS cv_skills
 FROM cv_job_matches AS m

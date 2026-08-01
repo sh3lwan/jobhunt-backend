@@ -201,6 +201,23 @@ func (s *DBJobService) ListMatchedJobs(ctx context.Context, filter MatchedJobsFi
 			}
 		}
 
+		job.EvalScore = numericToFloatPtr(row.EvalScore)
+		job.EvalDecision = row.EvalDecision.String
+		job.EvalStatus = row.EvalStatus.String
+		job.EvalTailoredCvURL = row.EvalTailoredCvPath.String
+		job.GeoRestriction = row.GeoRestriction.String
+		if row.GeoSponsorship.Valid {
+			v := row.GeoSponsorship.Bool
+			job.GeoSponsorship = &v
+		}
+		// sqlc types the jsonb expression as interface{}; pgx delivers it as []byte.
+		if raw, ok := row.EvalHardStops.([]byte); ok && len(raw) > 0 {
+			var stops []string
+			if err := json.Unmarshal(raw, &stops); err == nil {
+				job.EvalHardStops = stops
+			}
+		}
+
 		jobs = append(jobs, job)
 	}
 
